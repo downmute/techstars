@@ -141,6 +141,6 @@ Current color scheme is dark purple/indigo — **this needs to be replaced** wit
 | F5 | GCal stress forecasting | ✅ Done | Real Google Calendar API, LLM break recommendations, recovery-calibrated, break notification |
 | F6 | Clinic dashboard patient panel | ✅ Done | Auth, RPCs, real-time updates, anonymized patient list |
 | F7 | Doctor daily summary | ✅ Done | Clinical LLM summary per patient, wired to dashboard daily/weekly/detail pages |
-| F8 | Smart doctor alerts | ⬜ Not started | |
+| F8 | Smart doctor alerts | ✅ Done | Live Supabase alerts, resolve action, real-time, severity filters |
 | F9 | Data privacy / RLS | ⬜ Not started | |
 | F10 | Voice probe model | ⬜ Not started | Intentionally last |

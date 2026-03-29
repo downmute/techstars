@@ -549,3 +549,99 @@ export async function getWeeklySummary(
 		},
 	};
 }
+
+export type AlertSeverity = "urgent" | "high" | "medium" | "low";
+
+export interface AlertItem {
+	id: string;
+	patientId: string;
+	patientName: string;
+	type: string;
+	severity: AlertSeverity;
+	reason: string;
+	differential: string | null;
+	suggestedAction: string | null;
+	createdAt: string;
+	resolvedAt: string | null;
+	weeksPP: number;
+	score: number;
+}
+
+export interface AlertStats {
+	total: number;
+	urgent: number;
+	high: number;
+	medium: number;
+	low: number;
+	resolved: number;
+}
+
+export async function getAlertsPanel(
+	includeResolved = true,
+): Promise<{ alerts: AlertItem[]; stats: AlertStats }> {
+	const supabase = await createClient();
+
+	const { data: panelRows } = await supabase.rpc("get_patient_panel");
+	const patientIndex = new Map<string, number>();
+	if (panelRows) {
+		for (let i = 0; i < panelRows.length; i++) {
+			patientIndex.set(panelRows[i].patient_id as string, i + 1);
+		}
+	}
+
+	const { data, error } = await supabase.rpc("get_alerts_panel", {
+		p_include_resolved: includeResolved,
+	});
+
+	if (error || !data) {
+		console.warn("[queries] get_alerts_panel failed:", error?.message);
+		return {
+			alerts: [],
+			stats: { total: 0, urgent: 0, high: 0, medium: 0, low: 0, resolved: 0 },
+		};
+	}
+
+	const alerts: AlertItem[] = (
+		data as {
+			flag_id: string;
+			patient_id: string;
+			flag_type: string;
+			flag_severity: string;
+			flag_reason: string;
+			flag_differential: string | null;
+			flag_suggested_action: string | null;
+			flag_created_at: string;
+			flag_resolved_at: string | null;
+			weeks_postpartum: number;
+			overall_score: number | null;
+		}[]
+	).map((row) => {
+		const idx = patientIndex.get(row.patient_id);
+		return {
+			id: row.flag_id,
+			patientId: row.patient_id,
+			patientName: idx ? `Patient ${idx}` : "Unknown Patient",
+			type: row.flag_type,
+			severity: row.flag_severity as AlertSeverity,
+			reason: row.flag_reason,
+			differential: row.flag_differential,
+			suggestedAction: row.flag_suggested_action,
+			createdAt: row.flag_created_at,
+			resolvedAt: row.flag_resolved_at,
+			weeksPP: row.weeks_postpartum ?? 0,
+			score: row.overall_score ? Math.round(Number(row.overall_score)) : 0,
+		};
+	});
+
+	const active = alerts.filter((a) => !a.resolvedAt);
+	const stats: AlertStats = {
+		total: active.length,
+		urgent: active.filter((a) => a.severity === "urgent").length,
+		high: active.filter((a) => a.severity === "high").length,
+		medium: active.filter((a) => a.severity === "medium").length,
+		low: active.filter((a) => a.severity === "low").length,
+		resolved: alerts.filter((a) => a.resolvedAt).length,
+	};
+
+	return { alerts, stats };
+}

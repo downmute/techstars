@@ -285,15 +285,30 @@ Steps are ordered to front-load design decisions, then infrastructure, then feat
 
 ---
 
-## Step 12 — F8: Smart Doctor Alerts
+## Step 12 — F8: Smart Doctor Alerts ✅ DONE
 
 **Goal**: When a flag fires, give the doctor a clinical brief — not just a ping.
 
 **Scope**:
-- [ ] Alert contains: triggered pattern ("mood ≤2/5 for 4 consecutive days"), differential ("Possible PPD, sleep deprivation masking as depression, postpartum anxiety"), suggested action ("Schedule a 15-min phone check-in, consider EPDS screening")
-- [ ] Alert card in dashboard with severity indicator
-- [ ] "Mark resolved" action on each alert
-- [ ] Notification to clinic (email or push) for high-severity flags
+- [x] Alert contains: triggered pattern (reason), differential, suggested action — all from live `flags` table data
+- [x] Alert card in dashboard with severity indicator (urgent/high/medium/low color-coded badges + left border)
+- [x] "Mark resolved" action on each alert — calls `resolve_flag()` RPC, optimistic UI, resolved alerts show with muted styling + timestamp
+- [x] Severity filter buttons with live counts (Urgent | High | Medium | Low | Resolved)
+- [x] Patient names link to `/patients/[id]` detail page, anonymized ("Patient 1", "Patient 2"...)
+- [x] Real-time: Supabase Realtime subscription on `flags` table triggers `router.refresh()` for live updates
+- [x] Empty state handling when no alerts match the active filter
+- [ ] Notification to clinic (email or push) for high-severity flags — deferred (requires Resend/SendGrid infrastructure)
+
+**Supabase changes** (migration `012_smart_alerts_rpcs.sql`):
+- `get_alerts_panel(p_include_resolved)` — SECURITY DEFINER, returns all flags for clinician's clinic with patient context (weeks PP, latest recovery score), ordered by severity then recency, includes resolved flags from last 7 days when requested
+- `resolve_flag(p_flag_id)` — SECURITY DEFINER, sets `resolved_at = now()` with clinic access guard, idempotent (double-resolve returns false)
+
+**Architecture**: Server component (`alerts/page.tsx`) fetches data via `getAlertsPanel()` RPC → passes to `AlertsClient` client component for interactivity (filtering, expansion, resolve action via browser Supabase client)
+
+**Files created**: `supabase/migrations/012_smart_alerts_rpcs.sql`, `dashboard/src/app/alerts/alerts-client.tsx`
+**Files modified**: `dashboard/src/lib/queries.ts`, `dashboard/src/app/alerts/page.tsx`, `dashboard/src/lib/mock-data.ts`
+
+**Build status**: TypeScript ✅ 0 errors, Biome ✅ 0 errors, Next.js build ✅ passes
 
 ---
 
