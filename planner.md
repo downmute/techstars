@@ -312,16 +312,55 @@ Steps are ordered to front-load design decisions, then infrastructure, then feat
 
 ---
 
-## Step 13 — F9: Data Privacy / RLS
+## Step 13 — F9: Data Privacy / RLS ✅ DONE
 
 **Goal**: Enforce the data firewall at the database level. This should actually be set up in Step 3 alongside the schema, but the full audit and tightening happens here.
 
 **Scope**:
-- [ ] Audit all Supabase RLS policies
-- [ ] Patient: can only read/write their own rows
-- [ ] Clinic: can read `recovery_scores` and `flags` for patients linked to their clinic — never raw `check_ins`
-- [ ] Anonymization: clinic queries return patient IDs only, never PII
-- [ ] Service role (server-side only) for generating summaries and alerts
+- [x] Audit all Supabase RLS policies
+- [x] Patient: can only read/write their own rows
+  - Removed `daily_summaries` patient SELECT policy (leaked `clinical_summary` column)
+  - Created `get_my_daily_summary()` and `get_my_recent_summaries()` RPCs that return only `user_summary`
+  - Updated `daily-summary-service.ts` to use RPCs instead of direct SELECT
+- [x] Clinic: can read `recovery_scores` and `flags` for patients linked to their clinic — never raw `check_ins`
+  - Added `is_clinician()` guard to all 5 clinic-facing RLS policies (users, recovery_scores, flags×2, daily_summaries)
+  - Added `IF NOT is_clinician() THEN RETURN; END IF;` to all 8 dashboard RPCs
+  - Fixed `is_clinician()` function with `SET search_path = public`
+- [x] Anonymization: clinic queries return patient IDs only, never PII
+  - Confirmed: `users` table stores no PII (no name, email, phone). Anonymization ("Patient 1"…) handled in `queries.ts` by row index.
+- [x] Service role (server-side only) for generating summaries and alerts
+  - Dashboard uses anon key + clinician session (correct — RPCs enforce role checks)
+  - Mobile app writes clinical_summary via authenticated session (accepted for MVP — patient can only write their own row, clinical text is generated client-side from their own data)
+  - Created `resolve_clinic_code()` RPC to replace broken direct `clinics` table access
+  - Updated `user-service.ts` to use RPC instead of `.from("clinics").select(...)`
+
+**Supabase changes** (migration `013_rls_tighten.sql` + `014_fix_rls_recursion.sql`):
+- Recreated `is_clinician()` with `SET search_path = public`
+- Created `is_same_clinic(p_user_id)` SECURITY DEFINER helper — fixes infinite recursion bug in self-referencing `users` table policies (pre-existing from migration 010)
+- DROP + recreated 5 clinic-facing RLS policies with `is_clinician()` + `is_same_clinic()` guards
+- Dropped patient SELECT policy on `daily_summaries` (column-level leak fix)
+- Created `get_my_daily_summary(p_date)` — patient-facing, returns only `user_summary`
+- Created `get_my_recent_summaries(p_limit)` — patient-facing, returns only `user_summary`
+- Created `resolve_clinic_code(p_code)` — resolves clinic name → UUID (replaces broken direct table access)
+- Recreated all 8 dashboard RPCs with `is_clinician()` guard
+- Fixed pre-existing `survey-state.ts` TypeScript error (`Promise.resolve` wrap on `rehydrate()`)
+
+**Live-tested against Supabase** (10 tests, all pass):
+- `is_clinician()`: true for clinician, false for patient
+- Patient blocked from all 8 dashboard RPCs (0 rows)
+- Patient blocked from direct `daily_summaries` SELECT (0 rows, no `clinical_summary` leak)
+- Patient CAN use `get_my_daily_summary` RPC
+- Patient sees only own row in `users` (1 of 7)
+- Patient sees only own `recovery_scores` (7 of 42)
+- Patient sees 0 `flags` (by design)
+- Patient cannot `resolve_flag` (returns false)
+- `resolve_clinic_code` works with case-insensitive match
+- Clinician sees all 6 patients, 5 alerts, 6 daily summaries
+
+**Files created**: `supabase/migrations/013_rls_tighten.sql`
+**Files modified**: `techstars/src/services/supabase/daily-summary-service.ts`, `techstars/src/services/supabase/user-service.ts`, `techstars/src/state/survey-state.ts`
+
+**Build status**: TypeScript ✅ 0 errors (pre-existing `survey-state.ts` error fixed), Biome ✅ 0 errors, Next.js build ✅ passes
 
 ---
 

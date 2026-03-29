@@ -56,26 +56,23 @@ export async function saveClinicalSummary(
 
 /**
  * Fetches the patient-facing summary for a specific date (defaults to today).
- * Returns null if none exists or the request fails.
+ * Uses get_my_daily_summary RPC — never exposes clinical_summary to the client.
  */
 export async function getDailySummary(
-	userId: string,
+	_userId: string,
 	date?: string,
 ): Promise<string | null> {
 	const target = date ?? new Date().toISOString().slice(0, 10);
 
-	const { data, error } = await supabase
-		.from("daily_summaries")
-		.select("user_summary")
-		.eq("user_id", userId)
-		.eq("date", target)
-		.maybeSingle();
+	const { data, error } = await supabase.rpc("get_my_daily_summary", {
+		p_date: target,
+	});
 
 	if (error) {
 		console.warn("[Supabase] getDailySummary failed:", error.message);
 		return null;
 	}
-	return (data?.user_summary as string) ?? null;
+	return (data as string) ?? null;
 }
 
 interface SummaryRow {
@@ -85,23 +82,25 @@ interface SummaryRow {
 
 /**
  * Fetches the most recent N patient-facing summaries, newest first.
- * Returns an empty array on failure.
+ * Uses get_my_recent_summaries RPC — never exposes clinical_summary to the client.
  */
 export async function getRecentSummaries(
-	userId: string,
+	_userId: string,
 	limit = 7,
 ): Promise<SummaryRow[]> {
-	const { data, error } = await supabase
-		.from("daily_summaries")
-		.select("date, user_summary")
-		.eq("user_id", userId)
-		.not("user_summary", "is", null)
-		.order("date", { ascending: false })
-		.limit(limit);
+	const { data, error } = await supabase.rpc("get_my_recent_summaries", {
+		p_limit: limit,
+	});
 
 	if (error) {
 		console.warn("[Supabase] getRecentSummaries failed:", error.message);
 		return [];
 	}
-	return (data as SummaryRow[]) ?? [];
+
+	return ((data as { summary_date: string; user_summary: string }[]) ?? []).map(
+		(row) => ({
+			date: row.summary_date,
+			user_summary: row.user_summary,
+		}),
+	);
 }

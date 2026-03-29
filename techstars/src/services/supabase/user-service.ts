@@ -24,12 +24,14 @@ async function resolveClinicId(
 	clinicCode: string | null,
 ): Promise<string | null> {
 	if (!clinicCode?.trim()) return null;
-	const { data } = await supabase
-		.from("clinics")
-		.select("id")
-		.eq("name", clinicCode.trim())
-		.maybeSingle();
-	return data?.id ?? null;
+	const { data, error } = await supabase.rpc("resolve_clinic_code", {
+		p_code: clinicCode.trim(),
+	});
+	if (error) {
+		console.warn("[Supabase] resolveClinicId failed:", error.message);
+		return null;
+	}
+	return (data as string) ?? null;
 }
 
 /**

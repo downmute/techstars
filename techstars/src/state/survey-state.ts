@@ -119,8 +119,7 @@ export async function ensureSurveyStoreHydrated(): Promise<void> {
 		return;
 	}
 
-	hydrationPromise ??= persistApi
-		.rehydrate()
+	hydrationPromise ??= Promise.resolve(persistApi.rehydrate())
 		.catch(() => {})
 		.finally(() => {
 			hydrationPromise = null;

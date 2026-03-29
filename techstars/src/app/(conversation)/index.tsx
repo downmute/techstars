@@ -347,9 +347,6 @@ export default function HomeScreen() {
 							style={styles.actionCard}
 							onPress={() => router.navigate("/(conversation)/checkin")}
 						>
-							<View style={styles.actionIconWrap}>
-								<Text style={styles.actionIcon}>+</Text>
-							</View>
 							<Text style={styles.actionTitle}>Check in</Text>
 							<Text style={styles.actionSubtitle}>
 								{streakCount > 0 ? `${streakCount}-day streak` : "Start today"}
@@ -359,9 +356,6 @@ export default function HomeScreen() {
 							style={styles.actionCard}
 							onPress={() => router.navigate("/(conversation)/voice")}
 						>
-							<View style={styles.actionIconWrap}>
-								<Text style={styles.actionIcon}>🎙</Text>
-							</View>
 							<Text style={styles.actionTitle}>Voice</Text>
 							<Text style={styles.actionSubtitle}>Talk it through</Text>
 						</Pressable>
@@ -596,8 +590,11 @@ const styles = StyleSheet.create({
 		borderRadius: 20,
 		borderWidth: 1,
 		borderColor: ReEntryColors.border,
-		padding: 18,
-		gap: 10,
+		padding: 20,
+		gap: 6,
+		alignItems: "center",
+		justifyContent: "center",
+		minHeight: 90,
 	},
 	actionIconWrap: {
 		width: 40,
@@ -613,14 +610,16 @@ const styles = StyleSheet.create({
 	},
 	actionTitle: {
 		color: ReEntryColors.textPrimary,
-		fontSize: 17,
+		fontSize: 19,
 		fontWeight: "700",
 		fontFamily: Fonts.serif,
+		textAlign: "center",
 	},
 	actionSubtitle: {
 		color: ReEntryColors.textSecondary,
-		fontSize: 13,
+		fontSize: 14,
 		fontFamily: Fonts.sans,
+		textAlign: "center",
 	},
 	calendarHeader: {
 		flexDirection: "row",
