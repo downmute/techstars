@@ -5,6 +5,7 @@ import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { Fonts } from "@/constants/theme";
 import { ReEntryColors } from "@/constants/vela-colors";
 import { generateAndStoreRecommendation } from "@/services/calendar/calendar-recommendation";
+import { generateAndStoreClinicalSummary } from "@/services/clinical-summary-generator";
 import { generateAndStoreSummary } from "@/services/daily-summary-generator";
 import { detectFlags } from "@/services/flag-service";
 import { computeRecoveryScore } from "@/services/recovery-score-service";
@@ -310,6 +311,10 @@ export function DailySurvey() {
 
 		upsertSurveyScores(todayKey, scores);
 
+		const updatedHistory = { ...surveyHistory, [todayKey]: scores };
+		const latestRecovery = computeRecoveryScore(scores, weeksPostpartum);
+		const detectedFlags = detectFlags(updatedHistory, hopelessness);
+
 		if (supabaseUserId) {
 			const row: CheckInRow = {
 				mood,
@@ -325,31 +330,36 @@ export function DailySurvey() {
 			};
 			await saveCheckIn(supabaseUserId, row);
 
-			const recoveryResult = computeRecoveryScore(scores, weeksPostpartum);
-			if (recoveryResult) {
-				saveRecoveryScore(supabaseUserId, recoveryResult);
+			if (latestRecovery) {
+				saveRecoveryScore(supabaseUserId, latestRecovery);
 			}
 
-			const updatedHistory = { ...surveyHistory, [todayKey]: scores };
-			const flags = detectFlags(updatedHistory, hopelessness);
-			for (const flag of flags) {
+			for (const flag of detectedFlags) {
 				saveFlag(supabaseUserId, flag);
 			}
 		}
 
 		setSaveState("saved");
 
-		const updatedHistoryForSummary = { ...surveyHistory, [todayKey]: scores };
-		const latestRecovery = computeRecoveryScore(scores, weeksPostpartum);
-
 		generateAndStoreSummary({
 			scores,
 			recoveryResult: latestRecovery,
 			hardestTag,
-			surveyHistory: updatedHistoryForSummary,
+			surveyHistory: updatedHistory,
 			userName,
 			supabaseUserId,
 			upsertSummary,
+		});
+
+		generateAndStoreClinicalSummary({
+			scores,
+			recoveryResult: latestRecovery,
+			hardestTag,
+			surveyHistory: updatedHistory,
+			flags: detectedFlags,
+			weeksPostpartum,
+			rawHopelessness: hopelessness,
+			supabaseUserId,
 		});
 
 		if (calendarEvents.length > 0) {

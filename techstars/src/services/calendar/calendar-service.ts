@@ -19,7 +19,8 @@ interface GoogleCalendarItem {
 
 function mapGoogleEvent(item: GoogleCalendarItem): CalendarEvent {
 	return {
-		id: item.id ?? `gcal-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+		id:
+			item.id ?? `gcal-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
 		title: item.summary ?? "(No title)",
 		start: item.start?.dateTime ?? item.start?.date ?? "",
 		end: item.end?.dateTime ?? item.end?.date ?? "",

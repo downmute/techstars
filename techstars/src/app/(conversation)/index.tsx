@@ -147,12 +147,6 @@ export default function HomeScreen() {
 	const calendarEvents = useAppStore((s) => s.calendarEvents);
 	const calendarRecommendation = useAppStore((s) => s.calendarRecommendation);
 	const calendarLastFetched = useAppStore((s) => s.calendarLastFetched);
-	const setCalendarEvents = useAppStore((s) => s.setCalendarEvents);
-	const setCalendarRecommendation = useAppStore(
-		(s) => s.setCalendarRecommendation,
-	);
-	const setCalendarLastFetched = useAppStore((s) => s.setCalendarLastFetched);
-	const setGoogleAccessToken = useAppStore((s) => s.setGoogleAccessToken);
 
 	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
 	const summaryHistory = useSurveyStore((s) => s.summaryHistory);
@@ -185,35 +179,41 @@ export default function HomeScreen() {
 	const todayDate = new Date().toISOString().slice(0, 10);
 	const isCalendarStale = !calendarLastFetched?.startsWith(todayDate);
 	const visibleEvents = isCalendarStale ? [] : calendarEvents;
-	const visibleRecommendation = isCalendarStale
-		? null
-		: calendarRecommendation;
+	const visibleRecommendation = isCalendarStale ? null : calendarRecommendation;
 
-	const fetchCalendar = useCallback(async () => {
-		const state = useAppStore.getState();
-		const today = new Date().toISOString().slice(0, 10);
-		if (
-			state.calendarLastFetched?.startsWith(today) &&
-			state.calendarEvents.length > 0
-		) {
-			return;
-		}
+	const fetchCalendar = useCallback(
+		async (force = false) => {
+			const state = useAppStore.getState();
+			const today = new Date().toISOString().slice(0, 10);
+			if (
+				!force &&
+				state.calendarLastFetched?.startsWith(today) &&
+				state.calendarEvents.length > 0
+			) {
+				return;
+			}
 
-		const result = await getCalendarEvents(state.googleAccessToken, 24, () =>
-			useAppStore.getState().setGoogleAccessToken(null),
-		);
-		useAppStore.getState().setCalendarEvents(result.events);
-		useAppStore.getState().setCalendarLastFetched(new Date().toISOString());
+			const result = await getCalendarEvents(state.googleAccessToken, 24, () =>
+				useAppStore.getState().setGoogleAccessToken(null),
+			);
+			useAppStore.getState().setCalendarEvents(result.events);
+			useAppStore.getState().setCalendarLastFetched(new Date().toISOString());
 
-		if (result.events.length > 0 && !useAppStore.getState().calendarRecommendation) {
-			generateAndStoreRecommendation({
-				events: result.events,
-				recoveryScore: currentScore,
-				userName,
-				setCalendarRecommendation: useAppStore.getState().setCalendarRecommendation,
-			});
-		}
-	}, [currentScore, userName]);
+			if (
+				result.events.length > 0 &&
+				(force || !useAppStore.getState().calendarRecommendation)
+			) {
+				generateAndStoreRecommendation({
+					events: result.events,
+					recoveryScore: currentScore,
+					userName,
+					setCalendarRecommendation:
+						useAppStore.getState().setCalendarRecommendation,
+				});
+			}
+		},
+		[currentScore, userName],
+	);
 
 	useEffect(() => {
 		if (!hasFetchedRef.current) {
@@ -371,7 +371,7 @@ export default function HomeScreen() {
 						<View style={styles.calendarHeader}>
 							<Text style={styles.calendarLabel}>TODAY</Text>
 							{googleAccessToken && visibleEvents.length > 0 && (
-								<Pressable onPress={fetchCalendar}>
+								<Pressable onPress={() => fetchCalendar(true)}>
 									<Text style={styles.calendarLink}>Refresh</Text>
 								</Pressable>
 							)}

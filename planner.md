@@ -80,8 +80,8 @@ Steps are ordered to front-load design decisions, then infrastructure, then feat
 - [ ] Configure Railway project pointing to `/dashboard` folder
 - [ ] Set environment variables (Supabase URL, anon key, service key)
 - [ ] Verify build + deploy pipeline
-- [ ] Set up basic auth protection for clinic routes
-- [ ] Replace mock data with live Supabase queries
+- [x] Set up basic auth protection for clinic routes (done in Step 10 — middleware + login page)
+- [x] Replace mock data with live Supabase queries (done in Step 10 — RPCs + queries.ts)
 
 ---
 
@@ -212,28 +212,76 @@ Steps are ordered to front-load design decisions, then infrastructure, then feat
 
 ---
 
-## Step 10 — F6: Clinic Dashboard — Patient Panel
+## Step 10 — F6: Clinic Dashboard — Patient Panel ✅ DONE
 
-**Goal**: Build the Next.js clinic dashboard patient panel view.
+**Goal**: Build the Next.js clinic dashboard patient panel view, wired to live Supabase data with clinician auth and real-time updates.
 
 **Scope**:
-- [ ] Auth: clinic login (Supabase auth, clinic role)
-- [ ] Patient list: anonymized (Patient 1, Patient 2...), weeks PP, recovery score, 7-day trend sparkline, last check-in date
-- [ ] Color-coded status: green (on track), amber (watch), red (needs follow-up)
-- [ ] Click through to individual patient detail view
-- [ ] Real-time updates via Supabase Realtime when new check-ins arrive
+- [x] Auth: clinic login (Supabase auth, clinic role)
+  - Created `dashboard/src/app/login/page.tsx` — email/password login + registration with clinic code
+  - On register: `supabase.auth.signUp()` then calls `register_clinician(p_clinic_code)` RPC to link clinician to clinic
+  - Middleware (`dashboard/src/middleware.ts`) refreshes session on every request, redirects unauthenticated users to `/login`
+- [x] Patient list: anonymized (Patient 1, Patient 2...), weeks PP, recovery score, 7-day trend sparkline, last check-in date
+  - Created `get_patient_panel()` RPC — SECURITY DEFINER function returns all patients in clinician's clinic with latest recovery scores + active flag counts
+  - Created `get_patient_trend(patient_id, limit)` RPC — returns last N `overall_score` entries for sparkline
+  - `dashboard/src/lib/queries.ts` — typed query functions: `getPatientPanel()`, `getPatientDetail()`, `computeStats()`
+  - Patients anonymized by row index ("Patient 1", "Patient 2"...) — no PII stored or displayed
+- [x] Color-coded status: green (on track ≥70), amber (watch 50–69), red (flagged <50 or active flags)
+  - `deriveStatus()` in `queries.ts` maps score + flag count → `PatientStatus`
+- [x] Click through to individual patient detail view
+  - `get_patient_detail(patient_id)` RPC — returns full patient profile + latest scores + active flags with clinic access guard
+  - Patient detail page fetches real data, shows recovery ring, sub-score bars, flag history from live flags
+- [x] Real-time updates via Supabase Realtime when new check-ins arrive
+  - Added `recovery_scores` and `flags` tables to `supabase_realtime` publication
+  - Created `dashboard/src/components/realtime-patient-panel.tsx` — subscribes to postgres_changes on both tables, calls `router.refresh()` to re-render server components with fresh data
+
+**Supabase changes** (migration `010_register_clinician_rpc.sql`, applied via MCP):
+- `register_clinician(p_clinic_code)` — SECURITY DEFINER, resolves clinic code → clinic_id, updates users + auth.users metadata
+- `get_patient_panel()` — SECURITY DEFINER, returns anonymized patient list for clinician's clinic
+- `get_patient_trend(patient_id, limit)` — SECURITY DEFINER, returns sparkline data with clinic access guard
+- `get_patient_detail(patient_id)` — SECURITY DEFINER, returns full patient info + flags with clinic access guard
+- New RLS policy: "Clinics can read patient profiles" on `users` table
+
+**Files created**: `dashboard/src/lib/supabase/client.ts`, `dashboard/src/lib/supabase/server.ts`, `dashboard/src/lib/queries.ts`, `dashboard/src/app/login/page.tsx`, `dashboard/src/middleware.ts`, `dashboard/src/components/realtime-patient-panel.tsx`, `dashboard/.env.local`
+**Files modified**: `dashboard/src/app/page.tsx`, `dashboard/src/app/patients/[id]/page.tsx`, `dashboard/src/components/patient-table.tsx`, `dashboard/src/components/flag-history.tsx`, `dashboard/package.json`
+
+**Build status**: TypeScript ✅ 0 errors, Biome ✅ 0 errors on changed files
 
 ---
 
-## Step 11 — F7: Doctor Daily Summary (Clinical)
+## Step 11 — F7: Doctor Daily Summary (Clinical) ✅ DONE
 
 **Goal**: Unfiltered clinical summary for the provider.
 
 **Scope**:
-- [ ] After each patient check-in, generate clinical summary via Groq
-- [ ] Prompt: clinical, factual, no softening — list scores, trends, red flags, risk indicators
-- [ ] Display in patient detail view on dashboard
-- [ ] Include in weekly summary push (Monday email/notification to provider)
+- [x] After each patient check-in, generate clinical summary via Groq
+  - Created `techstars/src/services/clinical-summary-generator.ts` — clinical LLM prompt (factual, no softening) + `generateAndStoreClinicalSummary()` fire-and-forget orchestrator
+  - System prompt: "You are a clinical decision support tool for an OB/GYN provider…" — reports domain scores, trend direction, flags, risk indicators
+  - User prompt includes: today's scores, recovery result, 7-day history, active flags with severity/differential, raw hopelessness score, weeks postpartum
+  - Called from `handleSave` in `daily-survey.tsx` alongside existing user-facing summary (both run in parallel, neither blocks save state)
+- [x] Prompt: clinical, factual, no softening — list scores, trends, red flags, risk indicators
+  - Clinical summary writes to `daily_summaries.clinical_summary` column (existing table, previously NULL)
+  - Added `saveClinicalSummary()` to `daily-summary-service.ts` — upserts on `(user_id, date)` same as user summary
+- [x] Display in patient detail view on dashboard
+  - Created `get_patient_clinical_summaries(p_patient_id, p_limit)` RPC — SECURITY DEFINER with clinic access guard
+  - Added "Clinical Notes" section to `patients/[id]/page.tsx` — dark panel showing date-labeled summaries with AI-Generated badge
+  - Fetched in parallel with patient detail data via `Promise.all`
+- [x] Include in weekly summary push (Monday email/notification to provider)
+  - Created `get_daily_summary_panel(p_date)` RPC — returns all patient check-ins for a date with scores, deltas, and clinical summaries
+  - Created `get_weekly_summary(p_start_date, p_end_date)` RPC — aggregates flag counts, avg scores, check-in counts, and flagged patients with clinical summaries
+  - Wired daily summary page to real Supabase data — replaced all mock imports, added date navigation (prev/next day)
+  - Wired weekly email page to real aggregated data — replaced inline mock data, added week navigation, computed score distribution from live data
+  - Note: actual email sending infrastructure (cron, Resend/SendGrid) deferred — page displays real data, email delivery is a Step 12+ concern
+
+**Supabase changes** (migration `011_clinical_summary_rpcs.sql`):
+- `get_patient_clinical_summaries(p_patient_id, p_limit)` — returns recent clinical summaries for a patient with clinic access guard
+- `get_daily_summary_panel(p_date)` — returns all patients who checked in on a date with score, delta, clinical summary, flag count
+- `get_weekly_summary(p_start_date, p_end_date)` — per-patient weekly aggregates: check-in count, avg/latest score, delta, flags, latest clinical summary
+
+**Files created**: `techstars/src/services/clinical-summary-generator.ts`, `supabase/migrations/011_clinical_summary_rpcs.sql`
+**Files modified**: `techstars/src/services/supabase/daily-summary-service.ts`, `techstars/src/components/home/daily-survey.tsx`, `dashboard/src/lib/queries.ts`, `dashboard/src/app/patients/[id]/page.tsx`, `dashboard/src/app/daily-summary/page.tsx`, `dashboard/src/app/weekly-email/page.tsx`
+
+**Build status**: TypeScript ✅ 0 errors, Biome ✅ 0 errors, Linter ✅ 0 errors
 
 ---
 

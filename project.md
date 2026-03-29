@@ -139,8 +139,8 @@ Current color scheme is dark purple/indigo — **this needs to be replaced** wit
 | F3 | Recovery Score | ✅ Done | STORK-grounded 5-category dynamic weighting + PPD flag detection + Supabase persistence |
 | F4 | User daily summary | ✅ Done | Groq LLM warm recap, fire-and-forget, Supabase + Zustand persistence |
 | F5 | GCal stress forecasting | ✅ Done | Real Google Calendar API, LLM break recommendations, recovery-calibrated, break notification |
-| F6 | Clinic dashboard patient panel | ⬜ Not started | |
-| F7 | Doctor daily summary | ⬜ Not started | |
+| F6 | Clinic dashboard patient panel | ✅ Done | Auth, RPCs, real-time updates, anonymized patient list |
+| F7 | Doctor daily summary | ✅ Done | Clinical LLM summary per patient, wired to dashboard daily/weekly/detail pages |
 | F8 | Smart doctor alerts | ⬜ Not started | |
 | F9 | Data privacy / RLS | ⬜ Not started | |
 | F10 | Voice probe model | ⬜ Not started | Intentionally last |

@@ -1,74 +1,82 @@
-import { alerts } from "@/lib/mock-data";
-
-interface FlagHistoryProps {
-  patientId: string;
+interface FlagItem {
+	id: string;
+	type: string;
+	severity: string;
+	reason: string;
+	differential: string | null;
+	suggestedAction: string | null;
+	createdAt: string;
 }
 
-const flagData = [
-  {
-    title: "PPD Risk",
-    description: "Mood ≤ 2/5 for 4 consecutive days",
-    date: "Today, 7:15 AM",
-    status: "Active" as const,
-    severity: "danger",
-  },
-  {
-    title: "Sleep Decline",
-    description: "Sleep + mood declining 5+ days",
-    date: "Mar 26",
-    status: "Active" as const,
-    severity: "warning",
-  },
-  {
-    title: "Anxiety Spike",
-    description: "Anxiety 8/10 for 2 days",
-    date: "Mar 18",
-    status: "Resolved" as const,
-    severity: "success",
-  },
-];
+interface FlagHistoryProps {
+	flags: FlagItem[];
+}
 
-export function FlagHistory({ patientId }: FlagHistoryProps) {
-  return (
-    <div className="rounded-2xl border border-border bg-surface p-6">
-      <h2 className="mb-4 font-display text-xl text-text">Flag history</h2>
-      <div className="flex flex-col gap-3">
-        {flagData.map((flag) => {
-          const borderColor =
-            flag.severity === "danger"
-              ? "border-l-danger"
-              : flag.severity === "warning"
-                ? "border-l-warning"
-                : "border-l-success";
+const severityBorderColor: Record<string, string> = {
+	urgent: "border-l-danger",
+	high: "border-l-danger",
+	medium: "border-l-warning",
+	low: "border-l-success",
+};
 
-          const badgeBg =
-            flag.status === "Active"
-              ? "bg-danger/10 text-danger"
-              : "bg-success/10 text-success";
+const typeLabel: Record<string, string> = {
+	ppd_risk: "PPD Risk",
+	mood_decline: "Mood Decline",
+	sleep_decline: "Sleep Decline",
+	language_alert: "Language Alert",
+	voice_discrepancy: "Voice Discrepancy",
+};
 
-          return (
-            <div
-              key={flag.title}
-              className={`rounded-xl border border-border border-l-4 ${borderColor} bg-background p-4`}
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="font-medium text-text">{flag.title}</p>
-                  <p className="mt-0.5 text-sm text-text-secondary">
-                    {flag.description}
-                  </p>
-                  <p className="mt-1 text-xs text-text-muted">{flag.date}</p>
-                </div>
-                <span
-                  className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeBg}`}
-                >
-                  {flag.status}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
+function formatFlagDate(iso: string): string {
+	const d = new Date(iso);
+	return d.toLocaleDateString("en-US", {
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+	});
+}
+
+export function FlagHistory({ flags }: FlagHistoryProps) {
+	return (
+		<div className="rounded-2xl border border-border bg-surface p-6">
+			<h2 className="mb-4 font-display text-xl text-text">Flag history</h2>
+			{flags.length === 0 ? (
+				<p className="py-4 text-center text-sm text-text-muted">
+					No active flags
+				</p>
+			) : (
+				<div className="flex flex-col gap-3">
+					{flags.map((flag) => {
+						const borderColor =
+							severityBorderColor[flag.severity] ?? "border-l-warning";
+
+						return (
+							<div
+								key={flag.id}
+								className={`rounded-xl border border-border border-l-4 ${borderColor} bg-background p-4`}
+							>
+								<div className="flex items-start justify-between">
+									<div>
+										<p className="font-medium text-text">
+											{typeLabel[flag.type] ?? flag.type}
+										</p>
+										<p className="mt-0.5 text-sm text-text-secondary">
+											{flag.reason}
+										</p>
+										<p className="mt-1 text-xs text-text-muted">
+											{formatFlagDate(flag.createdAt)}
+										</p>
+									</div>
+									<span className="rounded-full bg-danger/10 px-2.5 py-0.5 text-xs font-medium text-danger">
+										Active
+									</span>
+								</div>
+							</div>
+						);
+					})}
+				</div>
+			)}
+		</div>
+	);
 }
