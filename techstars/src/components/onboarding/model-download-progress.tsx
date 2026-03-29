@@ -61,7 +61,7 @@ export function ModelDownloadProgress({
           cx={RING_SIZE / 2}
           cy={RING_SIZE / 2}
           r={RADIUS}
-          stroke="rgba(197,193,245,0.1)"
+          stroke="rgba(44,31,26,0.08)"
           strokeWidth={STROKE_WIDTH}
           fill="none"
         />
@@ -70,7 +70,7 @@ export function ModelDownloadProgress({
           cx={RING_SIZE / 2}
           cy={RING_SIZE / 2}
           r={RADIUS}
-          stroke={isDone ? '#1D9E75' : '#C5C1F5'}
+          stroke={isDone ? '#5A8A6A' : '#B5604F'}
           strokeWidth={STROKE_WIDTH}
           fill="none"
           strokeDasharray={CIRCUMFERENCE}
@@ -122,29 +122,29 @@ const styles = StyleSheet.create({
     marginTop: 120,
   },
   percentText: {
-    color: '#C5C1F5',
+    color: '#B5604F',
     fontSize: 40,
     fontWeight: '200',
     letterSpacing: -1,
   },
   modelName: {
-    color: 'rgba(197,193,245,0.6)',
+    color: '#8A6F65',
     fontSize: 14,
     textAlign: 'center',
   },
   eta: {
-    color: 'rgba(197,193,245,0.4)',
+    color: '#B39B93',
     fontSize: 13,
   },
   hint: {
-    color: 'rgba(197,193,245,0.3)',
+    color: '#B39B93',
     fontSize: 12,
     textAlign: 'center',
     lineHeight: 18,
     marginTop: 4,
   },
   doneText: {
-    color: '#1D9E75',
+    color: '#5A8A6A',
     fontSize: 24,
     fontWeight: '300',
   },

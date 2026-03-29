@@ -1,478 +1,553 @@
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { router } from "expo-router";
+
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import Animated, { FadeInDown } from "react-native-reanimated";
+import { SafeAreaView } from "react-native-safe-area-context";
+import Svg, { Circle } from "react-native-svg";
+import { Fonts } from "@/constants/theme";
+import { APP_BACKGROUND, ReEntryColors } from "@/constants/vela-colors";
 import {
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
-import { SafeAreaView } from 'react-native-safe-area-context';
+	computeRecoveryScore,
+	type RecoveryScoreResult,
+} from "@/services/recovery-score-service";
+import { useAppStore } from "@/state/app-state";
+import { getSortedSurveyDates, useSurveyStore } from "@/state/survey-state";
 
-import { APP_BACKGROUND } from '@/constants/vela-colors';
-import { Fonts } from '@/constants/theme';
-import { DailySurvey } from '@/components/home/daily-survey';
-import {
-  WellbeingChart,
-  type WellbeingPoint,
-} from '@/components/home/wellbeing-chart';
-import { useAppStore } from '@/state/app-state';
-import {
-  computeOverallWellbeing,
-  getSortedSurveyDates,
-  useSurveyStore,
-} from '@/state/survey-state';
-
-type TimeframeKey = '1w' | '1m' | '3m' | '6m';
-
-const timeframeOptions: { key: TimeframeKey; label: string }[] = [
-  { key: '1w', label: '1W' },
-  { key: '1m', label: '1M' },
-  { key: '3m', label: '3M' },
-  { key: '6m', label: '6M' },
-];
-
-function getDayLabel(dateKey: string): string {
-  const parsed = new Date(`${dateKey}T12:00:00`);
-  return parsed.toLocaleDateString('en-US', { weekday: 'short' });
+function getGreeting(): string {
+	const hour = new Date().getHours();
+	if (hour < 12) return "Good morning";
+	if (hour < 17) return "Good afternoon";
+	return "Good evening";
 }
 
-function getMonthLabel(monthIndex: number): string {
-  return new Date(2026, monthIndex, 1).toLocaleDateString('en-US', {
-    month: 'short',
-  });
+function RecoveryRing({ score }: { score: number | null }) {
+	const size = 100;
+	const strokeWidth = 8;
+	const radius = (size - strokeWidth) / 2;
+	const circumference = 2 * Math.PI * radius;
+	const progress = score !== null ? score / 100 : 0;
+	const strokeDashoffset = circumference * (1 - progress);
+
+	return (
+		<View style={ringStyles.container}>
+			<Svg width={size} height={size}>
+				<Circle
+					cx={size / 2}
+					cy={size / 2}
+					r={radius}
+					stroke={ReEntryColors.surfaceRaised}
+					strokeWidth={strokeWidth}
+					fill="none"
+				/>
+				<Circle
+					cx={size / 2}
+					cy={size / 2}
+					r={radius}
+					stroke={ReEntryColors.primary}
+					strokeWidth={strokeWidth}
+					fill="none"
+					strokeLinecap="round"
+					strokeDasharray={`${circumference} ${circumference}`}
+					strokeDashoffset={strokeDashoffset}
+					rotation={-90}
+					origin={`${size / 2}, ${size / 2}`}
+				/>
+			</Svg>
+			<View style={ringStyles.labelWrap}>
+				<Text style={ringStyles.scoreText}>
+					{score !== null ? score : "--"}
+				</Text>
+			</View>
+		</View>
+	);
 }
 
-function getDateAtLocalMidday(dateKey: string): Date {
-  return new Date(`${dateKey}T12:00:00`);
+const ringStyles = StyleSheet.create({
+	container: {
+		width: 100,
+		height: 100,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	labelWrap: {
+		position: "absolute",
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	scoreText: {
+		fontSize: 28,
+		fontWeight: "700",
+		fontFamily: Fonts.serif,
+		color: ReEntryColors.textPrimary,
+	},
+});
+
+function SubScoreBar({ label, value }: { label: string; value: number }) {
+	return (
+		<View style={subStyles.row}>
+			<Text style={subStyles.label}>{label}</Text>
+			<View style={subStyles.track}>
+				<View style={[subStyles.fill, { width: `${Math.min(value, 100)}%` }]} />
+			</View>
+			<Text style={subStyles.value}>{value}</Text>
+		</View>
+	);
 }
 
-function getTimeframeChartData(
-  history: ReturnType<typeof useSurveyStore.getState>['surveyHistory'],
-  timeframe: TimeframeKey
-): WellbeingPoint[] {
-  const dates = getSortedSurveyDates(history);
-
-  if (timeframe === '1w') {
-    return dates.slice(-7).flatMap((date) => {
-      const overall = computeOverallWellbeing(history[date] ?? {});
-      if (typeof overall !== 'number') {
-        return [];
-      }
-      return [{ label: getDayLabel(date), value: overall }];
-    });
-  }
-
-  if (timeframe === '1m') {
-    const today = new Date();
-    const weeklyBuckets = [0, 1, 2, 3].map((index) => ({
-      label: `Wk ${index + 1}`,
-      values: [] as number[],
-    }));
-
-    for (const date of dates) {
-      const overall = computeOverallWellbeing(history[date] ?? {});
-      if (typeof overall !== 'number') {
-        continue;
-      }
-
-      const dayAge = Math.floor(
-        (today.getTime() - getDateAtLocalMidday(date).getTime()) /
-          (1000 * 60 * 60 * 24)
-      );
-      if (dayAge < 0 || dayAge >= 28) {
-        continue;
-      }
-
-      const bucketIndex = 3 - Math.floor(dayAge / 7);
-      if (bucketIndex >= 0 && bucketIndex < weeklyBuckets.length) {
-        weeklyBuckets[bucketIndex]!.values.push(overall);
-      }
-    }
-
-    return weeklyBuckets.flatMap((bucket) => {
-      if (bucket.values.length === 0) {
-        return [];
-      }
-
-      return [
-        {
-          label: bucket.label,
-          value: Math.round(
-            bucket.values.reduce((sum, value) => sum + value, 0) /
-              bucket.values.length
-          ),
-        },
-      ];
-    });
-  }
-
-  const monthCount = timeframe === '3m' ? 3 : 6;
-  const monthlyBuckets = new Map<string, number[]>();
-
-  for (const date of dates) {
-    const monthKey = date.slice(0, 7);
-    const overall = computeOverallWellbeing(history[date] ?? {});
-    if (typeof overall !== 'number') {
-      continue;
-    }
-
-    const bucket = monthlyBuckets.get(monthKey) ?? [];
-    bucket.push(overall);
-    monthlyBuckets.set(monthKey, bucket);
-  }
-
-  return Array.from(monthlyBuckets.entries())
-    .slice(-monthCount)
-    .map(([monthKey, values]) => {
-      const monthIndex = Number(monthKey.slice(5, 7)) - 1;
-      const average = Math.round(
-        values.reduce((sum, value) => sum + value, 0) / values.length
-      );
-
-      return {
-        label: getMonthLabel(monthIndex),
-        value: average,
-      };
-    });
-}
+const subStyles = StyleSheet.create({
+	row: { flexDirection: "row", alignItems: "center", gap: 8 },
+	label: {
+		width: 56,
+		color: ReEntryColors.textSecondary,
+		fontSize: 11,
+		fontWeight: "600",
+		fontFamily: Fonts.sans,
+	},
+	track: {
+		flex: 1,
+		height: 6,
+		borderRadius: 3,
+		backgroundColor: ReEntryColors.surfaceRaised,
+		overflow: "hidden",
+	},
+	fill: {
+		height: "100%",
+		borderRadius: 3,
+		backgroundColor: ReEntryColors.accentSoft,
+	},
+	value: {
+		width: 26,
+		color: ReEntryColors.textPrimary,
+		fontSize: 11,
+		fontWeight: "700",
+		textAlign: "right",
+		fontFamily: Fonts.sans,
+	},
+});
 
 export default function HomeScreen() {
-  const [selectedTimeframe, setSelectedTimeframe] =
-    useState<TimeframeKey>('1w');
-  const userName = useAppStore((s) => s.userName);
-  const surveyHistory = useSurveyStore((s) => s.surveyHistory);
-  const chartData = getTimeframeChartData(surveyHistory, selectedTimeframe);
-  const hasChartData = chartData.length > 0;
-  const currentScore = chartData[chartData.length - 1]?.value ?? null;
-  const averageScore = hasChartData
-    ? Math.round(
-        chartData.reduce((total, point) => total + point.value, 0) /
-          chartData.length
-      )
-    : null;
-  const change =
-    hasChartData && currentScore !== null
-      ? currentScore - chartData[0]!.value
-      : null;
+	const userName = useAppStore((s) => s.userName);
+	const weeksPostpartum = useAppStore((s) => s.weeksPostpartum);
+	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
+	const dates = getSortedSurveyDates(surveyHistory);
+	const latestDate = dates[dates.length - 1];
+	const latestScores = latestDate ? surveyHistory[latestDate] : undefined;
+	const currentResult: RecoveryScoreResult | null = latestScores
+		? computeRecoveryScore(latestScores, weeksPostpartum)
+		: null;
+	const currentScore = currentResult?.overall ?? null;
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.glowPrimary} />
-      <View style={styles.glowSecondary} />
+	const previousDate = dates.length >= 2 ? dates[dates.length - 2] : undefined;
+	const previousScores = previousDate ? surveyHistory[previousDate] : undefined;
+	const previousResult = previousScores
+		? computeRecoveryScore(previousScores, weeksPostpartum)
+		: null;
+	const previousScore = previousResult?.overall ?? null;
+	const change =
+		currentScore !== null && previousScore !== null
+			? currentScore - previousScore
+			: null;
 
-      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-        <ScrollView
-          contentContainerStyle={styles.content}
-          showsVerticalScrollIndicator={false}
-        >
-          <Animated.View entering={FadeInDown.duration(450)}>
-            <Text style={styles.eyebrow}>Daily home</Text>
-            <Text style={styles.title}>Hi {userName?.trim() || 'there'}!</Text>
-            <Text style={styles.subtitle}>
-              A single place to track mood, recovery, sleep, support, and
-              return-to-work readiness.
-            </Text>
-          </Animated.View>
+	const streakCount = dates.length;
+	const firstName = userName?.trim()?.split(" ")[0] || "there";
 
-          <Animated.View
-            entering={FadeInDown.delay(80).duration(450)}
-            style={styles.voiceCard}
-          >
-            <View style={styles.voiceCardCopy}>
-              <Text style={styles.cardEyebrow}>Voice agent</Text>
-              <Text style={styles.cardTitle}>Talk through today&apos;s check-in</Text>
-              <Text style={styles.cardBody}>
-                Use the voice tab when you want Vela to listen for the clinical
-                context a quick slider can miss.
-              </Text>
-            </View>
-            <Pressable
-              style={styles.voiceButton}
-              onPress={() => router.navigate('/(conversation)/voice')}
-            >
-              <Text style={styles.voiceButtonText}>Open Voice</Text>
-            </Pressable>
-          </Animated.View>
+	return (
+		<View style={styles.container}>
+			<SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
+				<ScrollView
+					contentContainerStyle={styles.content}
+					showsVerticalScrollIndicator={false}
+				>
+					<Animated.View
+						entering={FadeInDown.duration(450)}
+						style={styles.header}
+					>
+						<View style={styles.headerLeft}>
+							<Text style={styles.greeting}>{getGreeting()}</Text>
+							<Text style={styles.name}>{firstName}</Text>
+						</View>
+						<View style={styles.avatar}>
+							<Text style={styles.avatarText}>
+								{firstName.charAt(0).toUpperCase()}
+							</Text>
+						</View>
+					</Animated.View>
 
-          <Animated.View
-            entering={FadeInDown.delay(150).duration(450)}
-            style={styles.chartCard}
-          >
-            <View style={styles.cardHeader}>
-              <Text style={styles.cardEyebrow}>Overall wellbeing</Text>
-              <Text style={styles.cardTitle}>Recovery trend over time</Text>
-              <Text style={styles.cardBody}>
-                Defaulting to one week, with a view out across the last several
-                months as patterns build.
-              </Text>
-            </View>
+					<Animated.View
+						entering={FadeInDown.delay(80).duration(450)}
+						style={styles.progressCard}
+					>
+						<View style={styles.progressRow}>
+							<RecoveryRing score={currentScore} />
+							<View style={styles.progressInfo}>
+								<Text style={styles.progressTitle}>
+									{currentScore !== null
+										? "You're doing well"
+										: "Start tracking"}
+								</Text>
+								<Text style={styles.progressBody}>
+									{currentScore !== null
+										? "Recovery trending up this week."
+										: "Complete your first check-in to see progress."}
+								</Text>
+							</View>
+						</View>
+						<View style={styles.chipRow}>
+							{change !== null && (
+								<View
+									style={[
+										styles.chip,
+										{
+											backgroundColor:
+												change >= 0
+													? "rgba(90,138,106,0.15)"
+													: "rgba(181,64,74,0.12)",
+										},
+									]}
+								>
+									<Text
+										style={[
+											styles.chipText,
+											{
+												color:
+													change >= 0
+														? ReEntryColors.success
+														: ReEntryColors.danger,
+											},
+										]}
+									>
+										{change >= 0 ? "+" : ""}
+										{change} pts
+									</Text>
+								</View>
+							)}
+							<View
+								style={[
+									styles.chip,
+									{ backgroundColor: "rgba(232,196,184,0.3)" },
+								]}
+							>
+								<Text
+									style={[styles.chipText, { color: ReEntryColors.primary }]}
+								>
+									Day {Math.max(streakCount, 1)}
+								</Text>
+							</View>
+						</View>
+						{currentResult && (
+							<View style={styles.subScoresWrap}>
+								<SubScoreBar label="Physical" value={currentResult.physical} />
+								<SubScoreBar label="Mental" value={currentResult.mental} />
+								<SubScoreBar label="Sleep" value={currentResult.sleep} />
+								<SubScoreBar label="Support" value={currentResult.support} />
+							</View>
+						)}
+					</Animated.View>
 
-            <View style={styles.timeframeRow}>
-              {timeframeOptions.map((option) => {
-                const selected = option.key === selectedTimeframe;
+					<Animated.View
+						entering={FadeInDown.delay(150).duration(450)}
+						style={styles.reflectionCard}
+					>
+						<Text style={styles.reflectionLabel}>TODAY&apos;S REFLECTION</Text>
+						<Text style={styles.reflectionText}>
+							{currentScore !== null
+								? `Solid night at 6.5 hours. Your mood is steady \u2014 that consistency matters more than any single day.`
+								: `Take a moment to check in with yourself today. Small steps build lasting change.`}
+						</Text>
+						<Text style={styles.reflectionHint}>
+							Try a short walk after lunch today.
+						</Text>
+					</Animated.View>
 
-                return (
-                  <Pressable
-                    key={option.key}
-                    style={[
-                      styles.timeframeChip,
-                      selected && styles.timeframeChipActive,
-                    ]}
-                    onPress={() => setSelectedTimeframe(option.key)}
-                  >
-                    <Text
-                      style={[
-                        styles.timeframeLabel,
-                        selected && styles.timeframeLabelActive,
-                      ]}
-                    >
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+					<Animated.View
+						entering={FadeInDown.delay(220).duration(450)}
+						style={styles.actionRow}
+					>
+						<Pressable
+							style={styles.actionCard}
+							onPress={() => router.navigate("/(conversation)/checkin")}
+						>
+							<View style={styles.actionIconWrap}>
+								<Text style={styles.actionIcon}>+</Text>
+							</View>
+							<Text style={styles.actionTitle}>Check in</Text>
+							<Text style={styles.actionSubtitle}>
+								{streakCount > 0 ? `${streakCount}-day streak` : "Start today"}
+							</Text>
+						</Pressable>
+						<Pressable
+							style={styles.actionCard}
+							onPress={() => router.navigate("/(conversation)/voice")}
+						>
+							<View style={styles.actionIconWrap}>
+								<Text style={styles.actionIcon}>🎙</Text>
+							</View>
+							<Text style={styles.actionTitle}>Voice</Text>
+							<Text style={styles.actionSubtitle}>Talk it through</Text>
+						</Pressable>
+					</Animated.View>
 
-            <View style={styles.statsRow}>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>Current</Text>
-                <Text style={styles.statValue}>
-                  {currentScore === null ? '--' : `${currentScore}/100`}
-                </Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>Average</Text>
-                <Text style={styles.statValue}>
-                  {averageScore === null ? '--' : `${averageScore}/100`}
-                </Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>Trend</Text>
-                <Text style={styles.statValue}>
-                  {change === null
-                    ? '--'
-                    : `${change >= 0 ? '+' : ''}${change}`}
-                </Text>
-              </View>
-            </View>
-
-            {hasChartData ? (
-              <WellbeingChart data={chartData} />
-            ) : (
-              <View style={styles.emptyChartState}>
-                <Text style={styles.emptyChartTitle}>No survey scores yet</Text>
-                <Text style={styles.emptyChartBody}>
-                  Daily survey results saved on this phone will show up here and
-                  be passed into Vela as recent context.
-                </Text>
-              </View>
-            )}
-          </Animated.View>
-
-          <Animated.View entering={FadeInDown.delay(220).duration(450)}>
-            <Text style={styles.sectionEyebrow}>Today&apos;s survey</Text>
-          </Animated.View>
-
-          <Animated.View entering={FadeInDown.delay(280).duration(420)}>
-            <DailySurvey />
-          </Animated.View>
-        </ScrollView>
-      </SafeAreaView>
-    </View>
-  );
+					<Animated.View entering={FadeInDown.delay(280).duration(420)}>
+						<View style={styles.calendarHeader}>
+							<Text style={styles.calendarLabel}>TODAY</Text>
+							<Pressable>
+								<Text style={styles.calendarLink}>See all</Text>
+							</Pressable>
+						</View>
+						<View style={styles.calendarCard}>
+							<View style={styles.calendarItem}>
+								<View
+									style={[
+										styles.calendarBorder,
+										{ backgroundColor: ReEntryColors.primary },
+									]}
+								/>
+								<View style={styles.calendarItemContent}>
+									<Text style={styles.calendarItemTitle}>Team standup</Text>
+									<Text style={styles.calendarItemTime}>10:00 AM</Text>
+								</View>
+							</View>
+							<View style={styles.calendarDivider} />
+							<View style={styles.calendarItem}>
+								<View
+									style={[
+										styles.calendarBorder,
+										{ backgroundColor: ReEntryColors.success },
+									]}
+								/>
+								<View style={styles.calendarItemContent}>
+									<Text style={styles.calendarItemTitle}>Suggested break</Text>
+									<Text style={styles.calendarItemTime}>12:30 PM</Text>
+								</View>
+							</View>
+						</View>
+					</Animated.View>
+				</ScrollView>
+			</SafeAreaView>
+		</View>
+	);
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: APP_BACKGROUND,
-  },
-  glowPrimary: {
-    position: 'absolute',
-    top: -80,
-    right: -30,
-    width: 260,
-    height: 260,
-    borderRadius: 130,
-    backgroundColor: 'rgba(127,119,221,0.24)',
-  },
-  glowSecondary: {
-    position: 'absolute',
-    top: 260,
-    left: -90,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: 'rgba(29,158,117,0.16)',
-  },
-  safe: {
-    flex: 1,
-  },
-  content: {
-    width: '100%',
-    maxWidth: 920,
-    alignSelf: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 18,
-    paddingBottom: 148,
-    gap: 18,
-  },
-  eyebrow: {
-    color: 'rgba(197,193,245,0.58)',
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 1.4,
-    textTransform: 'uppercase',
-  },
-  title: {
-    color: '#F4EFFC',
-    fontSize: 42,
-    lineHeight: 48,
-    fontWeight: '700',
-    fontFamily: Fonts.rounded,
-    marginTop: 10,
-  },
-  subtitle: {
-    color: 'rgba(240,238,248,0.72)',
-    fontSize: 17,
-    lineHeight: 28,
-    marginTop: 12,
-    maxWidth: 680,
-  },
-  voiceCard: {
-    borderRadius: 28,
-    padding: 22,
-    backgroundColor: 'rgba(18,18,29,0.9)',
-    borderWidth: 1,
-    borderColor: 'rgba(197,193,245,0.1)',
-    gap: 18,
-  },
-  voiceCardCopy: {
-    gap: 8,
-  },
-  cardHeader: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  cardEyebrow: {
-    color: 'rgba(247,226,197,0.78)',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  cardTitle: {
-    color: '#F4EFFC',
-    fontSize: 26,
-    lineHeight: 32,
-    fontWeight: '700',
-    fontFamily: Fonts.rounded,
-  },
-  cardBody: {
-    color: 'rgba(240,238,248,0.66)',
-    fontSize: 15,
-    lineHeight: 24,
-  },
-  voiceButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#C5C1F5',
-    borderRadius: 999,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  voiceButtonText: {
-    color: '#0A0A12',
-    fontSize: 14,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-  },
-  chartCard: {
-    borderRadius: 32,
-    padding: 22,
-    backgroundColor: 'rgba(14,14,23,0.94)',
-    borderWidth: 1,
-    borderColor: 'rgba(197,193,245,0.12)',
-    gap: 18,
-  },
-  timeframeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  timeframeChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  timeframeChipActive: {
-    backgroundColor: 'rgba(197,193,245,0.18)',
-    borderWidth: 1,
-    borderColor: 'rgba(197,193,245,0.26)',
-  },
-  timeframeLabel: {
-    color: 'rgba(240,238,248,0.62)',
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 0.4,
-  },
-  timeframeLabelActive: {
-    color: '#F4EFFC',
-  },
-  statsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  statCard: {
-    flexGrow: 1,
-    minWidth: 100,
-    borderRadius: 22,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    gap: 4,
-  },
-  statLabel: {
-    color: 'rgba(240,238,248,0.58)',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  statValue: {
-    color: '#F7E2C5',
-    fontSize: 24,
-    lineHeight: 28,
-    fontWeight: '700',
-    fontFamily: Fonts.rounded,
-  },
-  emptyChartState: {
-    borderRadius: 24,
-    paddingHorizontal: 18,
-    paddingVertical: 20,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    gap: 8,
-  },
-  emptyChartTitle: {
-    color: '#F4EFFC',
-    fontSize: 18,
-    lineHeight: 24,
-    fontWeight: '700',
-  },
-  emptyChartBody: {
-    color: 'rgba(240,238,248,0.66)',
-    fontSize: 14,
-    lineHeight: 22,
-  },
-  sectionEyebrow: {
-    color: 'rgba(197,193,245,0.58)',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    marginTop: 10,
-  },
+	container: {
+		flex: 1,
+		backgroundColor: APP_BACKGROUND,
+	},
+	safe: {
+		flex: 1,
+	},
+	content: {
+		paddingHorizontal: 24,
+		paddingTop: 18,
+		paddingBottom: 120,
+		gap: 20,
+	},
+	header: {
+		flexDirection: "row",
+		justifyContent: "space-between",
+		alignItems: "flex-start",
+	},
+	headerLeft: {
+		flex: 1,
+		gap: 4,
+	},
+	greeting: {
+		color: ReEntryColors.textSecondary,
+		fontSize: 13,
+		fontWeight: "500",
+		fontFamily: Fonts.sans,
+	},
+	name: {
+		color: ReEntryColors.textPrimary,
+		fontSize: 36,
+		fontWeight: "700",
+		fontFamily: Fonts.serif,
+		lineHeight: 42,
+	},
+	avatar: {
+		width: 44,
+		height: 44,
+		borderRadius: 22,
+		backgroundColor: ReEntryColors.primary,
+		alignItems: "center",
+		justifyContent: "center",
+		marginTop: 4,
+	},
+	avatarText: {
+		color: ReEntryColors.white,
+		fontSize: 18,
+		fontWeight: "700",
+		fontFamily: Fonts.serif,
+	},
+	progressCard: {
+		backgroundColor: ReEntryColors.surface,
+		borderRadius: 20,
+		borderWidth: 1,
+		borderColor: ReEntryColors.border,
+		padding: 20,
+		gap: 16,
+	},
+	progressRow: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 18,
+	},
+	progressInfo: {
+		flex: 1,
+		gap: 6,
+	},
+	progressTitle: {
+		color: ReEntryColors.textPrimary,
+		fontSize: 20,
+		fontWeight: "700",
+		fontFamily: Fonts.serif,
+	},
+	progressBody: {
+		color: ReEntryColors.textSecondary,
+		fontSize: 14,
+		lineHeight: 20,
+		fontFamily: Fonts.sans,
+	},
+	chipRow: {
+		flexDirection: "row",
+		gap: 8,
+	},
+	chip: {
+		borderRadius: 999,
+		paddingHorizontal: 12,
+		paddingVertical: 6,
+	},
+	chipText: {
+		fontSize: 13,
+		fontWeight: "700",
+		fontFamily: Fonts.sans,
+	},
+	subScoresWrap: {
+		gap: 6,
+		borderTopWidth: 1,
+		borderTopColor: ReEntryColors.border,
+		paddingTop: 14,
+	},
+	reflectionCard: {
+		backgroundColor: ReEntryColors.primary,
+		borderRadius: 20,
+		padding: 22,
+		gap: 12,
+	},
+	reflectionLabel: {
+		color: "rgba(250,247,244,0.7)",
+		fontSize: 11,
+		fontWeight: "700",
+		letterSpacing: 1.4,
+		textTransform: "uppercase",
+		fontFamily: Fonts.sans,
+	},
+	reflectionText: {
+		color: ReEntryColors.white,
+		fontSize: 18,
+		lineHeight: 26,
+		fontWeight: "500",
+		fontFamily: Fonts.serif,
+	},
+	reflectionHint: {
+		color: "rgba(250,247,244,0.65)",
+		fontSize: 14,
+		lineHeight: 20,
+		fontFamily: Fonts.sans,
+	},
+	actionRow: {
+		flexDirection: "row",
+		gap: 14,
+	},
+	actionCard: {
+		flex: 1,
+		backgroundColor: ReEntryColors.surface,
+		borderRadius: 20,
+		borderWidth: 1,
+		borderColor: ReEntryColors.border,
+		padding: 18,
+		gap: 10,
+	},
+	actionIconWrap: {
+		width: 40,
+		height: 40,
+		borderRadius: 20,
+		backgroundColor: ReEntryColors.surfaceRaised,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	actionIcon: {
+		fontSize: 20,
+		color: ReEntryColors.textPrimary,
+	},
+	actionTitle: {
+		color: ReEntryColors.textPrimary,
+		fontSize: 17,
+		fontWeight: "700",
+		fontFamily: Fonts.serif,
+	},
+	actionSubtitle: {
+		color: ReEntryColors.textSecondary,
+		fontSize: 13,
+		fontFamily: Fonts.sans,
+	},
+	calendarHeader: {
+		flexDirection: "row",
+		justifyContent: "space-between",
+		alignItems: "center",
+		marginBottom: 2,
+	},
+	calendarLabel: {
+		color: ReEntryColors.textMuted,
+		fontSize: 12,
+		fontWeight: "700",
+		letterSpacing: 1.2,
+		textTransform: "uppercase",
+	},
+	calendarLink: {
+		color: ReEntryColors.primary,
+		fontSize: 14,
+		fontWeight: "600",
+	},
+	calendarCard: {
+		backgroundColor: ReEntryColors.surface,
+		borderRadius: 20,
+		borderWidth: 1,
+		borderColor: ReEntryColors.border,
+		overflow: "hidden",
+	},
+	calendarItem: {
+		flexDirection: "row",
+		alignItems: "center",
+		paddingVertical: 16,
+		paddingHorizontal: 18,
+	},
+	calendarBorder: {
+		width: 3,
+		height: 32,
+		borderRadius: 2,
+		marginRight: 14,
+	},
+	calendarItemContent: {
+		flex: 1,
+		flexDirection: "row",
+		justifyContent: "space-between",
+		alignItems: "center",
+	},
+	calendarItemTitle: {
+		color: ReEntryColors.textPrimary,
+		fontSize: 15,
+		fontWeight: "600",
+		fontFamily: Fonts.sans,
+	},
+	calendarItemTime: {
+		color: ReEntryColors.textSecondary,
+		fontSize: 13,
+		fontFamily: Fonts.sans,
+	},
+	calendarDivider: {
+		height: 1,
+		backgroundColor: ReEntryColors.border,
+		marginLeft: 35,
+	},
 });

@@ -1,47 +1,43 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from "react-native";
+
+import { Fonts } from "@/constants/theme";
 
 interface OnboardingHeaderProps {
-  step: number;
-  title: string;
-  body?: string;
+	title: string;
+	body?: string;
+	align?: "left" | "center";
 }
 
 export function OnboardingHeader({
-  step,
-  title,
-  body,
+	title,
+	body,
+	align = "left",
 }: OnboardingHeaderProps) {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.stepLabel}>{step} of 7</Text>
-      <Text style={styles.title}>{title}</Text>
-      {body ? <Text style={styles.body}>{body}</Text> : null}
-    </View>
-  );
+	const alignItems = align === "center" ? "center" : "flex-start";
+	const textAlign = align;
+
+	return (
+		<View style={[styles.container, { alignItems }]}>
+			<Text style={[styles.title, { textAlign }]}>{title}</Text>
+			{body ? <Text style={[styles.body, { textAlign }]}>{body}</Text> : null}
+		</View>
+	);
 }
 
 const styles = StyleSheet.create({
-  container: {
-    alignItems: 'center',
-    gap: 12,
-  },
-  stepLabel: {
-    color: 'rgba(197,193,245,0.42)',
-    fontSize: 13,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  title: {
-    color: '#F0EEF8',
-    fontSize: 30,
-    fontWeight: '300',
-    textAlign: 'center',
-    lineHeight: 38,
-  },
-  body: {
-    color: 'rgba(197,193,245,0.66)',
-    fontSize: 18,
-    textAlign: 'center',
-    lineHeight: 28,
-  },
+	container: {
+		gap: 8,
+	},
+	title: {
+		color: "#2C1F1A",
+		fontSize: 32,
+		fontWeight: "normal",
+		fontFamily: Fonts?.serif,
+		lineHeight: 40,
+	},
+	body: {
+		color: "#8A6F65",
+		fontSize: 16,
+		lineHeight: 24,
+	},
 });

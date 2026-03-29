@@ -1,271 +1,369 @@
-import { router } from 'expo-router';
-import { useRef, useState } from 'react';
+import { router } from "expo-router";
+import { useState } from "react";
 import {
-  Animated as RNAnimated,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+	KeyboardAvoidingView,
+	Platform,
+	Pressable,
+	ScrollView,
+	StyleSheet,
+	Text,
+	TextInput,
+	View,
+} from "react-native";
+import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-import { APP_BACKGROUND } from '@/constants/vela-colors';
-import { OnboardingHeader } from '@/components/onboarding/onboarding-header';
-import { useAppStore } from '@/state/app-state';
-import { saveMemory } from '@/services/memory/memory-store';
-import type { MemoryCategory } from '@/services/memory/memory-types';
+import { ReEntryColors } from "@/constants/vela-colors";
+import { Fonts } from "@/constants/theme";
+import { useAppStore } from "@/state/app-state";
+import type { DeliveryType, FeedingMethod } from "@/state/app-state";
 
-interface Question {
-  key: 'hometown' | 'favoriteThings' | 'importantPerson';
-  prompt: string;
-  category: MemoryCategory;
-  placeholder: string;
-  buildMemoryContent: (userName: string, value: string) => string;
-  importanceScore: 1 | 2 | 3 | 4 | 5;
-}
-
-const QUESTIONS: Question[] = [
-  {
-    key: 'hometown',
-    prompt: 'Where did you grow up?',
-    category: 'life_story',
-    placeholder: 'e.g. Savannah, Georgia',
-    buildMemoryContent: (userName, value) =>
-      `${userName} grew up in ${value}.`,
-    importanceScore: 4,
-  },
-  {
-    key: 'favoriteThings',
-    prompt: 'What do you love to do?',
-    category: 'preference',
-    placeholder: 'e.g. Gardening, Frank Sinatra, and crosswords',
-    buildMemoryContent: (userName, value) =>
-      `${userName} loves ${value}.`,
-    importanceScore: 4,
-  },
-  {
-    key: 'importantPerson',
-    prompt: 'Tell Vela one person who matters to you.',
-    category: 'contact',
-    placeholder: 'e.g. My daughter Sarah',
-    buildMemoryContent: (userName, value) =>
-      `${value} matters a lot to ${userName}.`,
-    importanceScore: 5,
-  },
+const WEEKS_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const DELIVERY_OPTIONS: { label: string; value: DeliveryType }[] = [
+	{ label: "Vaginal", value: "vaginal" },
+	{ label: "C-Section", value: "c-section" },
+];
+const FEEDING_OPTIONS: { label: string; value: FeedingMethod }[] = [
+	{ label: "Breast", value: "breast" },
+	{ label: "Formula", value: "formula" },
+	{ label: "Both", value: "both" },
 ];
 
+function ProgressDots({
+	current,
+	total,
+}: { current: number; total: number }) {
+	return (
+		<View style={progressStyles.row}>
+			{Array.from({ length: total }).map((_, i) => (
+				<View
+					key={i}
+					style={[
+						progressStyles.dot,
+						{
+							backgroundColor:
+								i < current
+									? ReEntryColors.primary
+									: ReEntryColors.surfaceRaised,
+							width: i < current ? 24 : 16,
+						},
+					]}
+				/>
+			))}
+		</View>
+	);
+}
+
+const progressStyles = StyleSheet.create({
+	row: { flexDirection: "row", gap: 6, alignItems: "center" },
+	dot: { height: 4, borderRadius: 2 },
+});
+
+function BackButton() {
+	return (
+		<Pressable onPress={() => router.back()} style={backStyles.circle}>
+			<Text style={backStyles.chevron}>‹</Text>
+		</Pressable>
+	);
+}
+
+const backStyles = StyleSheet.create({
+	circle: {
+		width: 40,
+		height: 40,
+		borderRadius: 20,
+		backgroundColor: ReEntryColors.surface,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	chevron: { fontSize: 22, color: ReEntryColors.textPrimary, marginTop: -2 },
+});
+
 export default function AboutYouScreen() {
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [isSaving, setIsSaving] = useState(false);
-  const fadeAnim = useRef(new RNAnimated.Value(1)).current;
-  const userName = useAppStore((s) => s.userName);
-  const onboardingMemories = useAppStore((s) => s.onboardingMemories);
-  const setOnboardingMemory = useAppStore((s) => s.setOnboardingMemory);
+	const [name, setName] = useState(useAppStore.getState().userName ?? "");
+	const [weeks, setWeeks] = useState<number | null>(
+		useAppStore.getState().weeksPostpartum,
+	);
+	const [delivery, setDelivery] = useState<DeliveryType | null>(
+		useAppStore.getState().deliveryType,
+	);
+	const [feeding, setFeeding] = useState<FeedingMethod | null>(
+		useAppStore.getState().feedingMethod,
+	);
 
-  const question = QUESTIONS[currentIndex];
-  const currentAnswer = onboardingMemories[question.key];
-  const isLast = currentIndex === QUESTIONS.length - 1;
+	const setUserName = useAppStore((s) => s.setUserName);
+	const setWeeksPostpartum = useAppStore((s) => s.setWeeksPostpartum);
+	const setDeliveryType = useAppStore((s) => s.setDeliveryType);
+	const setFeedingMethod = useAppStore((s) => s.setFeedingMethod);
 
-  function setAnswer(text: string) {
-    setOnboardingMemory(question.key, text);
-  }
+	function handleContinue() {
+		if (name.trim()) setUserName(name.trim());
+		setWeeksPostpartum(weeks);
+		setDeliveryType(delivery);
+		setFeedingMethod(feeding);
+		router.push("/onboarding/clinic-code");
+	}
 
-  async function handleNext() {
-    if (!isLast) {
-      advanceOrFinish();
-      return;
-    }
+	const canContinue = name.trim().length > 0;
 
-    setIsSaving(true);
-    try {
-      const displayName = userName?.trim() || 'User';
-      await Promise.all(
-        QUESTIONS.map(async (item) => {
-          const value = onboardingMemories[item.key].trim();
-          if (!value) return;
+	return (
+		<SafeAreaView style={styles.container}>
+			<KeyboardAvoidingView
+				style={styles.flex}
+				behavior={Platform.OS === "ios" ? "padding" : "height"}
+			>
+				<Animated.View
+					entering={FadeIn.duration(400)}
+					style={styles.topBar}
+				>
+					<BackButton />
+					<ProgressDots current={1} total={5} />
+					<Text style={styles.stepLabel}>1 of 5</Text>
+				</Animated.View>
 
-          await saveMemory({
-            user_id: 'demo-user',
-            category: item.category,
-            content: item.buildMemoryContent(displayName, value),
-            importance_score: item.importanceScore,
-          });
-        })
-      );
-      router.push('/onboarding/check-in-time');
-    } finally {
-      setIsSaving(false);
-    }
-  }
+				<ScrollView
+					style={styles.flex}
+					contentContainerStyle={styles.scrollContent}
+					keyboardShouldPersistTaps="handled"
+					showsVerticalScrollIndicator={false}
+				>
+					<Animated.View entering={FadeInDown.delay(100).duration(400)}>
+						<Text style={styles.title}>Tell us about you</Text>
+						<Text style={styles.subtitle}>
+							So we can personalize your experience.
+						</Text>
+					</Animated.View>
 
-  function handleSkip() {
-    if (isLast) {
-      void handleNext();
-      return;
-    }
-    advanceOrFinish();
-  }
+					<Animated.View
+						entering={FadeInDown.delay(200).duration(400)}
+						style={styles.card}
+					>
+						<View style={styles.fieldGroup}>
+							<Text style={styles.fieldLabel}>NAME</Text>
+							<TextInput
+								style={styles.input}
+								value={name}
+								onChangeText={setName}
+								placeholder="Maria"
+								placeholderTextColor={ReEntryColors.textMuted}
+								autoCapitalize="words"
+								maxLength={40}
+							/>
+						</View>
 
-  function advanceOrFinish() {
-    if (isLast) {
-      return;
-    }
+						<View style={styles.fieldGroup}>
+							<Text style={styles.fieldLabel}>WEEKS POSTPARTUM</Text>
+							<ScrollView
+								horizontal
+								showsHorizontalScrollIndicator={false}
+								contentContainerStyle={styles.chipScroll}
+							>
+								{WEEKS_OPTIONS.map((w) => (
+									<Pressable
+										key={w}
+										onPress={() => setWeeks(w)}
+										style={[
+											styles.chip,
+											weeks === w && styles.chipActive,
+										]}
+									>
+										<Text
+											style={[
+												styles.chipText,
+												weeks === w && styles.chipTextActive,
+											]}
+										>
+											{w === 12 ? "12+" : String(w)}
+										</Text>
+									</Pressable>
+								))}
+							</ScrollView>
+						</View>
 
-    // Fade transition to next question
-    RNAnimated.timing(fadeAnim, {
-      toValue: 0,
-      duration: 200,
-      useNativeDriver: true,
-    }).start(() => {
-      setCurrentIndex((i) => i + 1);
-      RNAnimated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: true,
-      }).start();
-    });
-  }
+						<View style={styles.fieldGroup}>
+							<Text style={styles.fieldLabel}>DELIVERY TYPE</Text>
+							<View style={styles.chipRow}>
+								{DELIVERY_OPTIONS.map((opt) => (
+									<Pressable
+										key={opt.value}
+										onPress={() => setDelivery(opt.value)}
+										style={[
+											styles.pillChip,
+											delivery === opt.value && styles.chipActive,
+										]}
+									>
+										<Text
+											style={[
+												styles.chipText,
+												delivery === opt.value && styles.chipTextActive,
+											]}
+										>
+											{opt.label}
+										</Text>
+									</Pressable>
+								))}
+							</View>
+						</View>
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        style={styles.inner}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        {/* Progress dots */}
-        <View style={styles.progressRow}>
-          {QUESTIONS.map((_, i) => (
-            <View
-              key={i}
-              style={[styles.dot, i === currentIndex && styles.dotActive]}
-            />
-          ))}
-        </View>
+						<View style={styles.fieldGroup}>
+							<Text style={styles.fieldLabel}>FEEDING</Text>
+							<View style={styles.chipRow}>
+								{FEEDING_OPTIONS.map((opt) => (
+									<Pressable
+										key={opt.value}
+										onPress={() => setFeeding(opt.value)}
+										style={[
+											styles.pillChip,
+											feeding === opt.value && styles.chipActive,
+										]}
+									>
+										<Text
+											style={[
+												styles.chipText,
+												feeding === opt.value && styles.chipTextActive,
+											]}
+										>
+											{opt.label}
+										</Text>
+									</Pressable>
+								))}
+							</View>
+						</View>
+					</Animated.View>
+				</ScrollView>
 
-        <RNAnimated.View style={[styles.content, { opacity: fadeAnim }]}>
-          <OnboardingHeader
-            step={4}
-            title="Help Vela know you"
-            body="A few details now will make your very first conversation feel warmer."
-          />
-
-          <Text style={styles.subStepLabel}>
-            Question {currentIndex + 1} of {QUESTIONS.length}
-          </Text>
-
-          <Text style={styles.question}>{question.prompt}</Text>
-
-          <TextInput
-            style={styles.input}
-            value={currentAnswer}
-            onChangeText={setAnswer}
-            placeholder={question.placeholder}
-            placeholderTextColor="rgba(197,193,245,0.25)"
-            multiline
-            numberOfLines={4}
-            autoFocus
-            textAlignVertical="top"
-          />
-
-          <View style={styles.buttonRow}>
-            <Pressable
-              style={styles.skipBtn}
-              onPress={handleSkip}
-              disabled={isSaving}
-            >
-              <Text style={styles.skipText}>Skip</Text>
-            </Pressable>
-            <Pressable
-              style={[
-                styles.nextBtn,
-                isSaving && styles.nextBtnDim,
-              ]}
-              onPress={handleNext}
-              disabled={isSaving}
-            >
-              <Text style={styles.nextBtnText}>
-                {isSaving ? 'Saving...' : isLast ? 'Continue' : 'Next'}
-              </Text>
-            </Pressable>
-          </View>
-        </RNAnimated.View>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
-  );
+				<Animated.View
+					entering={FadeInDown.delay(400).duration(400)}
+					style={styles.bottomArea}
+				>
+					<Pressable
+						style={[styles.continueBtn, !canContinue && styles.btnDisabled]}
+						onPress={handleContinue}
+						disabled={!canContinue}
+					>
+						<Text style={styles.continueBtnText}>Continue</Text>
+					</Pressable>
+				</Animated.View>
+			</KeyboardAvoidingView>
+		</SafeAreaView>
+	);
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: APP_BACKGROUND },
-  inner: { flex: 1 },
-  progressRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    paddingTop: 20,
-    gap: 8,
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: 'rgba(197,193,245,0.2)',
-  },
-  dotActive: {
-    backgroundColor: '#C5C1F5',
-    width: 24,
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 36,
-    paddingTop: 40,
-    gap: 20,
-  },
-  subStepLabel: {
-    color: 'rgba(197,193,245,0.4)',
-    fontSize: 13,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    textAlign: 'center',
-  },
-  question: {
-    color: '#F0EEF8',
-    fontSize: 26,
-    fontWeight: '300',
-    lineHeight: 36,
-  },
-  input: {
-    flex: 1,
-    maxHeight: 200,
-    color: '#F0EEF8',
-    fontSize: 18,
-    lineHeight: 28,
-    borderWidth: 1,
-    borderColor: 'rgba(197,193,245,0.15)',
-    borderRadius: 16,
-    padding: 16,
-    backgroundColor: 'rgba(197,193,245,0.05)',
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingBottom: 24,
-    gap: 16,
-  },
-  skipBtn: {
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-  },
-  skipText: { color: 'rgba(197,193,245,0.4)', fontSize: 16 },
-  nextBtn: {
-    flex: 1,
-    backgroundColor: '#C5C1F5',
-    borderRadius: 32,
-    paddingVertical: 18,
-    alignItems: 'center',
-  },
-  nextBtnDim: { opacity: 0.5 },
-  nextBtnText: { color: '#0A0A12', fontSize: 18, fontWeight: '600' },
+	container: { flex: 1, backgroundColor: ReEntryColors.background },
+	flex: { flex: 1 },
+	topBar: {
+		flexDirection: "row",
+		alignItems: "center",
+		paddingHorizontal: 24,
+		paddingTop: 8,
+		paddingBottom: 16,
+		gap: 16,
+	},
+	stepLabel: {
+		fontFamily: Fonts?.sans,
+		fontSize: 13,
+		color: ReEntryColors.textMuted,
+		marginLeft: "auto",
+	},
+	scrollContent: {
+		paddingHorizontal: 24,
+		paddingBottom: 24,
+	},
+	title: {
+		fontFamily: Fonts?.serif,
+		fontSize: 32,
+		fontWeight: "700",
+		color: ReEntryColors.textPrimary,
+		marginBottom: 8,
+	},
+	subtitle: {
+		fontFamily: Fonts?.sans,
+		fontSize: 16,
+		color: ReEntryColors.textSecondary,
+		marginBottom: 28,
+		lineHeight: 22,
+	},
+	card: {
+		backgroundColor: ReEntryColors.surface,
+		borderRadius: 20,
+		borderWidth: 1,
+		borderColor: ReEntryColors.border,
+		padding: 24,
+		gap: 24,
+	},
+	fieldGroup: {
+		gap: 10,
+	},
+	fieldLabel: {
+		fontFamily: Fonts?.sans,
+		fontSize: 13,
+		fontWeight: "600",
+		color: ReEntryColors.textSecondary,
+		letterSpacing: 0.8,
+	},
+	input: {
+		fontFamily: Fonts?.sans,
+		backgroundColor: ReEntryColors.surfaceRaised,
+		borderRadius: 14,
+		paddingVertical: 16,
+		paddingHorizontal: 18,
+		fontSize: 16,
+		color: ReEntryColors.textPrimary,
+	},
+	chipScroll: {
+		gap: 8,
+		paddingRight: 8,
+	},
+	chipRow: {
+		flexDirection: "row",
+		flexWrap: "wrap",
+		gap: 10,
+	},
+	chip: {
+		backgroundColor: ReEntryColors.surfaceRaised,
+		borderRadius: 12,
+		paddingVertical: 10,
+		paddingHorizontal: 16,
+		minWidth: 44,
+		alignItems: "center",
+	},
+	pillChip: {
+		backgroundColor: ReEntryColors.surfaceRaised,
+		borderRadius: 999,
+		paddingVertical: 12,
+		paddingHorizontal: 22,
+	},
+	chipActive: {
+		backgroundColor: ReEntryColors.primary,
+	},
+	chipText: {
+		fontFamily: Fonts?.sans,
+		fontSize: 15,
+		fontWeight: "500",
+		color: ReEntryColors.textPrimary,
+	},
+	chipTextActive: {
+		color: ReEntryColors.white,
+	},
+	bottomArea: {
+		paddingHorizontal: 24,
+		paddingBottom: 16,
+		paddingTop: 8,
+	},
+	continueBtn: {
+		backgroundColor: ReEntryColors.accentSoft,
+		borderRadius: 999,
+		paddingVertical: 18,
+		alignItems: "center",
+	},
+	btnDisabled: {
+		opacity: 0.4,
+	},
+	continueBtnText: {
+		fontFamily: Fonts?.sans,
+		color: ReEntryColors.white,
+		fontSize: 16,
+		fontWeight: "600",
+	},
 });

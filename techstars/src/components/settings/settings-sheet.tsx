@@ -9,6 +9,7 @@ import {
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ReEntryColors } from '@/constants/vela-colors';
 import { useOrbStore } from '@/state/orb-state';
 import type { OrbStateValue } from '@/constants/vela-colors';
 import { useAppStore } from '@/state/app-state';
@@ -111,33 +112,33 @@ export function SettingsSheet({ visible, onClose }: SettingsSheetProps) {
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(44,31,26,0.5)',
   },
   sheet: {
-    backgroundColor: '#151222',
+    backgroundColor: ReEntryColors.background,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 24,
     paddingTop: 16,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(197,193,245,0.15)',
+    borderTopColor: ReEntryColors.border,
   },
   handle: {
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: 'rgba(197,193,245,0.3)',
+    backgroundColor: ReEntryColors.surfaceRaised,
     alignSelf: 'center',
     marginBottom: 20,
   },
   title: {
-    color: '#C5C1F5',
+    color: ReEntryColors.primary,
     fontSize: 18,
     fontWeight: '600',
     marginBottom: 20,
   },
   sectionLabel: {
-    color: 'rgba(197,193,245,0.5)',
+    color: ReEntryColors.textSecondary,
     fontSize: 12,
     fontWeight: '600',
     letterSpacing: 1,
@@ -149,28 +150,28 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   stateChip: {
-    backgroundColor: 'rgba(197,193,245,0.1)',
+    backgroundColor: ReEntryColors.surface,
     borderRadius: 20,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderWidth: 1,
-    borderColor: 'rgba(197,193,245,0.2)',
+    borderColor: ReEntryColors.border,
   },
   stateChipText: {
-    color: '#C5C1F5',
+    color: ReEntryColors.textPrimary,
     fontSize: 14,
   },
   actionButton: {
     marginTop: 4,
-    backgroundColor: 'rgba(197,193,245,0.1)',
+    backgroundColor: ReEntryColors.surface,
     borderRadius: 18,
     paddingHorizontal: 18,
     paddingVertical: 14,
     borderWidth: 1,
-    borderColor: 'rgba(197,193,245,0.2)',
+    borderColor: ReEntryColors.border,
   },
   actionButtonText: {
-    color: '#F0EEF8',
+    color: ReEntryColors.textPrimary,
     fontSize: 16,
     textAlign: 'center',
   },

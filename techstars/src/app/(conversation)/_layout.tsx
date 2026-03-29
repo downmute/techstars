@@ -4,7 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { Platform, StyleSheet, View } from 'react-native';
 import type { ComponentProps } from 'react';
 
-import { APP_BACKGROUND } from '@/constants/vela-colors';
+import { ReEntryColors, APP_BACKGROUND } from '@/constants/vela-colors';
 
 type TabIconName = ComponentProps<typeof SymbolView>['name'];
 
@@ -19,12 +19,7 @@ function TabIcon({
 }) {
   return (
     <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
-      <SymbolView
-        name={name}
-        size={20}
-        weight="semibold"
-        tintColor={color}
-      />
+      <SymbolView name={name} size={22} weight="medium" tintColor={color} />
     </View>
   );
 }
@@ -32,13 +27,13 @@ function TabIcon({
 export default function ConversationLayout() {
   return (
     <>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Tabs
         screenOptions={{
           headerShown: false,
           sceneStyle: { backgroundColor: APP_BACKGROUND },
-          tabBarActiveTintColor: '#F8EBD7',
-          tabBarInactiveTintColor: 'rgba(197,193,245,0.58)',
+          tabBarActiveTintColor: ReEntryColors.primary,
+          tabBarInactiveTintColor: ReEntryColors.textMuted,
           tabBarHideOnKeyboard: true,
           tabBarLabelStyle: styles.tabBarLabel,
           tabBarStyle: styles.tabBar,
@@ -53,10 +48,49 @@ export default function ConversationLayout() {
               <TabIcon
                 color={color}
                 focused={focused}
+                name={{ ios: 'house.fill', android: 'home', web: 'home' }}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="checkin"
+          options={{
+            title: 'Check-in',
+            tabBarIcon: ({ color, focused }) => (
+              <TabIcon
+                color={color}
+                focused={focused}
+                name={{ ios: 'clock', android: 'schedule', web: 'schedule' }}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="journal"
+          options={{
+            title: 'Journal',
+            tabBarIcon: ({ color, focused }) => (
+              <TabIcon
+                color={color}
+                focused={focused}
+                name={{ ios: 'heart', android: 'favorite', web: 'favorite' }}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="profile"
+          options={{
+            title: 'Profile',
+            tabBarIcon: ({ color, focused }) => (
+              <TabIcon
+                color={color}
+                focused={focused}
                 name={{
-                  ios: 'house.fill',
-                  android: 'home',
-                  web: 'home',
+                  ios: 'person.fill',
+                  android: 'person',
+                  web: 'person',
                 }}
               />
             ),
@@ -65,18 +99,7 @@ export default function ConversationLayout() {
         <Tabs.Screen
           name="voice"
           options={{
-            title: 'Voice',
-            tabBarIcon: ({ color, focused }) => (
-              <TabIcon
-                color={color}
-                focused={focused}
-                name={{
-                  ios: 'waveform',
-                  android: 'graphic_eq',
-                  web: 'graphic_eq',
-                }}
-              />
-            ),
+            href: null,
           }}
         />
       </Tabs>
@@ -86,25 +109,22 @@ export default function ConversationLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    position: 'absolute',
-    left: 18,
-    right: 18,
-    bottom: Platform.select({ ios: 18, android: 14, default: 14 }),
-    height: Platform.select({ ios: 82, default: 72 }),
-    backgroundColor: 'rgba(12,12,20,0.96)',
-    borderTopWidth: 0,
-    borderRadius: 28,
-    paddingBottom: Platform.select({ ios: 14, default: 10 }),
+    backgroundColor: 'rgba(250,247,244,0.95)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(44,31,26,0.06)',
+    height: Platform.select({ ios: 84, default: 64 }),
+    paddingBottom: Platform.select({ ios: 20, default: 8 }),
     paddingTop: 8,
     elevation: 0,
+    shadowOpacity: 0,
   },
   tabBarItem: {
-    paddingVertical: 4,
+    paddingVertical: 2,
   },
   tabBarLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.5,
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
   iconWrap: {
     width: 36,
@@ -114,6 +134,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   iconWrapActive: {
-    backgroundColor: 'rgba(248,235,215,0.12)',
+    backgroundColor: 'rgba(181,96,79,0.1)',
   },
 });
