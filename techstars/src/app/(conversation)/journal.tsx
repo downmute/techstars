@@ -50,6 +50,7 @@ function getReflectionText(score: number): string {
 export default function JournalScreen() {
 	const weeksPostpartum = useAppStore((s) => s.weeksPostpartum);
 	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
+	const summaryHistory = useSurveyStore((s) => s.summaryHistory);
 	const dates = getSortedSurveyDates(surveyHistory).reverse();
 	const recentDates = dates.slice(0, 7);
 
@@ -136,9 +137,11 @@ export default function JournalScreen() {
 										)}
 									</View>
 									<Text style={styles.entryBody}>
-										{overall !== null
-											? getReflectionText(overall)
-											: "Partial check-in recorded."}
+										{summaryHistory[dateKey]
+											? summaryHistory[dateKey]
+											: overall !== null
+												? getReflectionText(overall)
+												: "Partial check-in recorded."}
 									</Text>
 								</Animated.View>
 							);

@@ -155,16 +155,28 @@ Steps are ordered to front-load design decisions, then infrastructure, then feat
 
 ---
 
-## Step 8 — F4: User Daily Summary (Sugar-coated)
+## Step 8 — F4: User Daily Summary (Sugar-coated) ✅ DONE
 
 **Goal**: LLM-generated daily recap shown to the woman after check-in. Warm, encouraging tone.
 
 **Scope**:
-- [ ] After check-in saves, call Groq with survey scores + last 7 days history
-- [ ] Prompt: warm supportive friend tone, acknowledge effort, note progress, give one actionable tip
-- [ ] Display as a "Today's reflection" card on home screen
-- [ ] Save to `daily_summaries.user_summary` in Supabase
-- [ ] Make historical summaries browsable ("Progress journal" view)
+- [x] After check-in saves, call Groq with survey scores + last 7 days history
+  - Created `src/services/daily-summary-generator.ts` — builds prompt from today's scores, recovery result, hardest tag, and 7-day history via `formatRecentSurveyContext`, calls `chatOnce` (non-streaming Groq)
+  - Fire-and-forget from `handleSave` in `daily-survey.tsx` — runs after `setSaveState("saved")` so user is never blocked
+- [x] Prompt: warm supportive friend tone, acknowledge effort, note progress, give one actionable tip
+  - System prompt instructs 2-3 sentences max, no clinical language, no numeric scores, caring friend tone
+  - User prompt includes domain breakdown, hardest challenge tag, and recent history context
+- [x] Display as a "Today's reflection" card on home screen
+  - Home screen reflection card now reads `summaryHistory[todayKey]` from Zustand
+  - Three states: LLM summary (if available), "Generating your reflection…" (check-in done, summary pending), default fallback (no check-in today)
+- [x] Save to `daily_summaries.user_summary` in Supabase
+  - Created `src/services/supabase/daily-summary-service.ts` — `saveDailySummary()` upserts on `(user_id, date)`, `getDailySummary()`, `getRecentSummaries()`
+- [x] Make historical summaries browsable ("Progress journal" view)
+  - Journal screen now shows real LLM summaries from `summaryHistory` when available, falls back to score-tier templated text for older entries
+  - Added `summaryHistory: Record<string, string>` + `upsertSummary` to Zustand survey store (persisted to AsyncStorage)
+- [x] Bumped `chatOnce` `max_completion_tokens` from 256 → 400 for summary headroom
+
+**Build status**: TypeScript ✅ 0 new errors (1 pre-existing in `survey-state.ts`), Biome ✅ 0 errors
 
 ---
 

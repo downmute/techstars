@@ -4,6 +4,7 @@ import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 
 import { Fonts } from "@/constants/theme";
 import { ReEntryColors } from "@/constants/vela-colors";
+import { generateAndStoreSummary } from "@/services/daily-summary-generator";
 import { detectFlags } from "@/services/flag-service";
 import { computeRecoveryScore } from "@/services/recovery-score-service";
 import {
@@ -252,9 +253,11 @@ function CompletedSummary({
 
 export function DailySurvey() {
 	const upsertSurveyScores = useSurveyStore((s) => s.upsertSurveyScores);
+	const upsertSummary = useSurveyStore((s) => s.upsertSummary);
 	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
 	const supabaseUserId = useAppStore((s) => s.supabaseUserId);
 	const weeksPostpartum = useAppStore((s) => s.weeksPostpartum);
+	const userName = useAppStore((s) => s.userName);
 
 	const todayKey = getSurveyDateKey();
 	const existingScores = surveyHistory[todayKey];
@@ -330,6 +333,17 @@ export function DailySurvey() {
 		}
 
 		setSaveState("saved");
+
+		const updatedHistoryForSummary = { ...surveyHistory, [todayKey]: scores };
+		generateAndStoreSummary({
+			scores,
+			recoveryResult: computeRecoveryScore(scores, weeksPostpartum),
+			hardestTag,
+			surveyHistory: updatedHistoryForSummary,
+			userName,
+			supabaseUserId,
+			upsertSummary,
+		});
 	}
 
 	if (alreadyCompleted) {

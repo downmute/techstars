@@ -11,7 +11,11 @@ import {
 	type RecoveryScoreResult,
 } from "@/services/recovery-score-service";
 import { useAppStore } from "@/state/app-state";
-import { getSortedSurveyDates, useSurveyStore } from "@/state/survey-state";
+import {
+	getSortedSurveyDates,
+	getSurveyDateKey,
+	useSurveyStore,
+} from "@/state/survey-state";
 
 function getGreeting(): string {
 	const hour = new Date().getHours();
@@ -129,7 +133,11 @@ export default function HomeScreen() {
 	const userName = useAppStore((s) => s.userName);
 	const weeksPostpartum = useAppStore((s) => s.weeksPostpartum);
 	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
+	const summaryHistory = useSurveyStore((s) => s.summaryHistory);
 	const dates = getSortedSurveyDates(surveyHistory);
+	const todayKey = getSurveyDateKey();
+	const todaySummary = summaryHistory[todayKey] ?? null;
+	const hasCheckedInToday = Boolean(surveyHistory[todayKey]);
 	const latestDate = dates[dates.length - 1];
 	const latestScores = latestDate ? surveyHistory[latestDate] : undefined;
 	const currentResult: RecoveryScoreResult | null = latestScores
@@ -249,14 +257,23 @@ export default function HomeScreen() {
 						style={styles.reflectionCard}
 					>
 						<Text style={styles.reflectionLabel}>TODAY&apos;S REFLECTION</Text>
-						<Text style={styles.reflectionText}>
-							{currentScore !== null
-								? `Solid night at 6.5 hours. Your mood is steady \u2014 that consistency matters more than any single day.`
-								: `Take a moment to check in with yourself today. Small steps build lasting change.`}
-						</Text>
-						<Text style={styles.reflectionHint}>
-							Try a short walk after lunch today.
-						</Text>
+						{todaySummary ? (
+							<Text style={styles.reflectionText}>{todaySummary}</Text>
+						) : hasCheckedInToday ? (
+							<Text style={styles.reflectionText}>
+								Generating your reflection…
+							</Text>
+						) : (
+							<>
+								<Text style={styles.reflectionText}>
+									Take a moment to check in with yourself today. Small steps
+									build lasting change.
+								</Text>
+								<Text style={styles.reflectionHint}>
+									Try a short walk after lunch today.
+								</Text>
+							</>
+						)}
 					</Animated.View>
 
 					<Animated.View

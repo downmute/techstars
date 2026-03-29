@@ -16,9 +16,13 @@ export type SurveyScores = Partial<Record<SurveyCategory, number>>;
 
 export type SurveyHistory = Record<string, SurveyScores>;
 
+export type SummaryHistory = Record<string, string>;
+
 interface SurveyStore {
 	surveyHistory: SurveyHistory;
+	summaryHistory: SummaryHistory;
 	upsertSurveyScores: (date: string, scores: SurveyScores) => void;
+	upsertSummary: (date: string, text: string) => void;
 	clearSurveyHistory: () => void;
 }
 
@@ -129,6 +133,7 @@ export const useSurveyStore = create<SurveyStore>()(
 	persist(
 		(set) => ({
 			surveyHistory: {},
+			summaryHistory: {},
 			upsertSurveyScores: (date, scores) =>
 				set((state) => ({
 					surveyHistory: {
@@ -139,7 +144,14 @@ export const useSurveyStore = create<SurveyStore>()(
 						},
 					},
 				})),
-			clearSurveyHistory: () => set({ surveyHistory: {} }),
+			upsertSummary: (date, text) =>
+				set((state) => ({
+					summaryHistory: {
+						...state.summaryHistory,
+						[date]: text,
+					},
+				})),
+			clearSurveyHistory: () => set({ surveyHistory: {}, summaryHistory: {} }),
 		}),
 		{
 			name: "@vela/survey-history",
