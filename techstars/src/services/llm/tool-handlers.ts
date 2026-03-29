@@ -102,6 +102,23 @@ export interface ToolCall {
 	};
 }
 
+function formatCalendarDuration(start: Date, end: Date): string {
+	const minutes = Math.max(
+		0,
+		Math.round((end.getTime() - start.getTime()) / 60000),
+	);
+	if (minutes < 60) {
+		return `${minutes} min`;
+	}
+
+	const hours = Math.floor(minutes / 60);
+	const remainingMinutes = minutes % 60;
+	if (remainingMinutes === 0) {
+		return `${hours} hr`;
+	}
+	return `${hours} hr ${remainingMinutes} min`;
+}
+
 export async function executeToolCall(
 	toolCall: ToolCall,
 	userId = "demo-user",
@@ -119,22 +136,38 @@ export async function executeToolCall(
 		case "calendar_get_events": {
 			const hoursAhead = (args.hours_ahead as number) ?? 48;
 			const token = useAppStore.getState().googleAccessToken;
-			const { events } = await getCalendarEvents(token, hoursAhead, () =>
+			const result = await getCalendarEvents(token, hoursAhead, () =>
 				useAppStore.getState().setGoogleAccessToken(null),
+				{ allowMockFallback: false },
 			);
-			if (events.length === 0) return "No upcoming events found.";
-			return events
+			if (!result.isLive) {
+				if (result.reason === "not_connected") {
+					return "Google Calendar is not connected. Ask the user to connect Google Calendar before using this tool.";
+				}
+				if (result.reason === "token_expired") {
+					return "Google Calendar access expired. Ask the user to reconnect Google Calendar before using this tool.";
+				}
+				return "Google Calendar is temporarily unavailable right now.";
+			}
+			if (result.events.length === 0) return "No upcoming events found.";
+			return result.events
 				.map((e) => {
 					const start = new Date(e.start);
+					const end = new Date(e.end);
 					const dayLabel =
 						start.toDateString() === new Date().toDateString()
 							? "Today"
 							: "Tomorrow";
-					const time = start.toLocaleTimeString("en-US", {
+					const startTime = start.toLocaleTimeString("en-US", {
 						hour: "numeric",
 						minute: "2-digit",
 					});
-					return `${dayLabel} at ${time}: ${e.title}${e.location ? ` (${e.location})` : ""}`;
+					const endTime = end.toLocaleTimeString("en-US", {
+						hour: "numeric",
+						minute: "2-digit",
+					});
+					const duration = formatCalendarDuration(start, end);
+					return `${dayLabel} ${startTime}-${endTime} (${duration}): ${e.title}${e.location ? ` (${e.location})` : ""}`;
 				})
 				.join("\n");
 		}

@@ -7,6 +7,7 @@
  */
 
 import { Platform } from "react-native";
+import { getLocalDateKey } from "@/lib/date-utils";
 import { type ChatMessage, streamChat } from "@/services/llm/groq-client";
 import { buildSystemPrompt } from "@/services/llm/system-prompt";
 import { getTopMemories } from "@/services/memory/memory-store";
@@ -15,10 +16,17 @@ import { useConversationStore } from "@/state/conversation-state";
 import { useOrbStore } from "@/state/orb-state";
 import {
 	ensureSurveyStoreHydrated,
+	buildAggregatedSurveyHistory,
+	aggregateSurveyScores,
 	formatRecentSurveyContext,
+	surveyCategories,
 	useSurveyStore,
+	type SurveyHistory,
+	type SurveyCategory,
+	type SurveyScores,
 } from "@/state/survey-state";
 import { useVoiceStore } from "@/state/voice-state";
+import { evaluateVoiceWellbeing } from "./voice-wellbeing-evaluator";
 import {
 	cancelRecording,
 	startRecording,
@@ -42,7 +50,12 @@ import {
 	transcribeAudioBufferDetailed,
 	transcribeDetailed,
 } from "./stt-engine";
-import { speak, stopSpeaking } from "./tts-engine";
+import {
+	playSpeechAudio,
+	speak,
+	stopSpeaking,
+	synthesizeSpeechAudio,
+} from "./tts-engine";
 import { decodeBase64Pcm16ToFloat32, STT_SAMPLE_RATE } from "./wav-utils";
 
 export type PipelineState = "idle" | "recording" | "processing" | "speaking";
@@ -59,6 +72,10 @@ const LIVE_SILENCE_FLUSH_MS = 1200;
 const LIVE_DECODE_INTERVAL_SAMPLES = Math.floor(STT_SAMPLE_RATE * 0.28);
 const LIVE_PRE_ROLL_SAMPLES = Math.floor(STT_SAMPLE_RATE * 0.12);
 const LIVE_MIN_DECODE_INTERVAL_MS = 320;
+const LIVE_EOU_SILENCE_CONFIRM_MS = 350;
+const LIVE_EOU_STABILITY_MS = 650;
+const LIVE_PERSISTENT_EOU_FLUSH_MS = 1200;
+const LIVE_PERSISTENT_EOU_MIN_WORDS = 3;
 
 let currentState: PipelineState = "idle";
 let passiveListeningEnabled = false;
@@ -85,6 +102,28 @@ let liveParakeetStarted = false;
 let liveLastDecodeAt = 0;
 let liveEouCandidateTranscript = "";
 let liveEouCandidateCount = 0;
+let liveFirstEouAt = 0;
+
+interface WellbeingContextSnapshot {
+	aggregatedHistory: SurveyHistory;
+	todaySelfScores: SurveyScores | undefined;
+	todayAiScores: SurveyScores | undefined;
+	todayAggregatedScores: SurveyScores;
+	priorityDomain: SurveyCategory | null;
+	shouldAcknowledgeCompletion: boolean;
+}
+
+type WellbeingEvaluationResult = {
+	evaluationId: number;
+	todayKey: string;
+	aiEvaluation: Awaited<ReturnType<typeof evaluateVoiceWellbeing>>;
+};
+
+let pendingWellbeingEvaluationPromise:
+	| Promise<WellbeingEvaluationResult | null>
+	| null = null;
+let latestWellbeingEvaluationId = 0;
+let latestAppliedWellbeingEvaluationId = 0;
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -127,6 +166,265 @@ function setState(state: PipelineState) {
 
 function normalizeWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
+}
+
+function formatScoreBucketLabel(category: SurveyCategory): string {
+	switch (category) {
+		case "moodDepression":
+			return "mood";
+		case "anxiety":
+			return "worry";
+		case "sleepFatigue":
+			return "sleep";
+		case "physicalRecovery":
+			return "physical recovery";
+		case "socialSupport":
+			return "support";
+	}
+}
+
+function formatScoreSnapshot(scores: SurveyScores | null | undefined): string {
+	if (!scores) {
+		return "none";
+	}
+
+	const parts = Object.entries(scores)
+		.filter(([, value]) => typeof value === "number")
+		.map(([key, value]) => `${key}=${Math.round(value as number)}`);
+	return parts.length > 0 ? parts.join(", ") : "none";
+}
+
+function pickPriorityDomain(
+	selfScores: SurveyScores | undefined,
+	aiScores: SurveyScores | undefined,
+	aggregatedScores: SurveyScores,
+	suggestedFocus: SurveyCategory | null,
+): SurveyCategory | null {
+	if (suggestedFocus) {
+		return suggestedFocus;
+	}
+
+	const missingSelf = surveyCategories.find((category) => {
+		const value = selfScores?.[category];
+		return typeof value !== "number" || !Number.isFinite(value);
+	});
+	if (missingSelf) {
+		return missingSelf;
+	}
+
+	const missingAi = surveyCategories.find((category) => {
+		const value = aiScores?.[category];
+		return typeof value !== "number" || !Number.isFinite(value);
+	});
+	if (missingAi) {
+		return missingAi;
+	}
+
+	return surveyCategories.reduce<SurveyCategory | null>((lowest, category) => {
+		const value = aggregatedScores[category];
+		if (typeof value !== "number" || !Number.isFinite(value)) {
+			return lowest;
+		}
+		if (!lowest) {
+			return category;
+		}
+		return (aggregatedScores[lowest] ?? 101) > value ? category : lowest;
+	}, null);
+}
+
+function getStoredWellbeingContext(
+	todayKey: string,
+	suggestedFocus: SurveyCategory | null,
+): WellbeingContextSnapshot {
+	const surveyState = useSurveyStore.getState();
+	const aggregatedHistory = buildAggregatedSurveyHistory(
+		surveyState.surveyHistory,
+		surveyState.aiSurveyHistory,
+	);
+	const todaySelfScores = surveyState.surveyHistory[todayKey];
+	const todayAiScores = surveyState.aiSurveyHistory[todayKey];
+	const todayAggregatedScores = aggregateSurveyScores(
+		todaySelfScores,
+		todayAiScores,
+	);
+	const priorityDomain = pickPriorityDomain(
+		todaySelfScores,
+		todayAiScores,
+		todayAggregatedScores,
+		suggestedFocus,
+	);
+	const assessmentStatus = surveyState.aiAssessmentStatus[todayKey];
+
+	return {
+		aggregatedHistory,
+		todaySelfScores,
+		todayAiScores,
+		todayAggregatedScores,
+		priorityDomain,
+		shouldAcknowledgeCompletion: Boolean(
+			assessmentStatus?.complete && !assessmentStatus.acknowledged,
+		),
+	};
+}
+
+function persistVoiceWellbeingEvaluation(
+	todayKey: string,
+	aiEvaluation: Awaited<ReturnType<typeof evaluateVoiceWellbeing>>,
+) {
+	if (!aiEvaluation) {
+		return;
+	}
+
+	const surveyState = useSurveyStore.getState();
+	if (Object.keys(aiEvaluation.scores).length > 0) {
+		surveyState.upsertAiSurveyScores(todayKey, aiEvaluation.scores);
+	}
+	surveyState.setAiAssessmentStatus(todayKey, {
+		complete: aiEvaluation.allScoresReady,
+	});
+}
+
+function applyWellbeingEvaluationResult(
+	result: WellbeingEvaluationResult | null,
+) {
+	if (!result) {
+		return;
+	}
+	if (result.evaluationId <= latestAppliedWellbeingEvaluationId) {
+		return;
+	}
+	latestAppliedWellbeingEvaluationId = result.evaluationId;
+	persistVoiceWellbeingEvaluation(result.todayKey, result.aiEvaluation);
+}
+
+function startVoiceWellbeingEvaluation(args: {
+	todayKey: string;
+	messages: Parameters<typeof evaluateVoiceWellbeing>[0]["messages"];
+	selfReportedScores?: SurveyScores | null;
+	currentAggregatedScores?: SurveyScores | null;
+	recentAggregatedHistory?: SurveyHistory | null;
+}) {
+	const evaluationId = ++latestWellbeingEvaluationId;
+	const evaluationPromise = evaluateVoiceWellbeing({
+		messages: args.messages,
+		selfReportedScores: args.selfReportedScores,
+		currentAggregatedScores: args.currentAggregatedScores,
+		recentAggregatedHistory: args.recentAggregatedHistory,
+	})
+		.then((aiEvaluation) => ({
+			evaluationId,
+			todayKey: args.todayKey,
+			aiEvaluation,
+		}))
+		.catch((error) => {
+			console.warn("[VoiceEval] background scoring failed:", error);
+			return null;
+		})
+		.then((result) => {
+			applyWellbeingEvaluationResult(result);
+			return result;
+		})
+		.finally(() => {
+			if (pendingWellbeingEvaluationPromise === evaluationPromise) {
+				pendingWellbeingEvaluationPromise = null;
+			}
+		});
+
+	pendingWellbeingEvaluationPromise = evaluationPromise;
+	return evaluationPromise;
+}
+
+async function flushPendingWellbeingEvaluation(todayKey?: string): Promise<void> {
+	const pendingPromise = pendingWellbeingEvaluationPromise;
+	if (!pendingPromise) {
+		return;
+	}
+
+	const result = await pendingPromise;
+	if (todayKey && result && result.todayKey !== todayKey) {
+		return;
+	}
+	applyWellbeingEvaluationResult(result);
+}
+
+function tokenizeTranscript(text: string): string[] {
+	return normalizeWhitespace(
+		text
+			.toLowerCase()
+			.replace(/[^a-z0-9'\s]/g, " ")
+			.replace(/\b(coffy|cofee|cofey)\b/g, "coffee")
+			.replace(/\b(drinky|drinke)\b/g, "drink"),
+	)
+		.split(" ")
+		.filter(Boolean);
+}
+
+function collapseRepeatedWords(words: string[]): string[] {
+	const collapsed: string[] = [];
+	for (const word of words) {
+		if (collapsed[collapsed.length - 1] !== word) {
+			collapsed.push(word);
+		}
+	}
+	return collapsed;
+}
+
+function countCommonSuffixWords(a: string[], b: string[]): number {
+	let count = 0;
+	let ai = a.length - 1;
+	let bi = b.length - 1;
+
+	while (ai >= 0 && bi >= 0 && a[ai] === b[bi]) {
+		count += 1;
+		ai -= 1;
+		bi -= 1;
+	}
+
+	return count;
+}
+
+function areEouCandidatesCompatible(previous: string, next: string): boolean {
+	const prevWords = collapseRepeatedWords(tokenizeTranscript(previous));
+	const nextWords = collapseRepeatedWords(tokenizeTranscript(next));
+
+	if (prevWords.length === 0 || nextWords.length === 0) {
+		return false;
+	}
+
+	const prevJoined = prevWords.join(" ");
+	const nextJoined = nextWords.join(" ");
+	if (
+		prevJoined === nextJoined ||
+		prevJoined.includes(nextJoined) ||
+		nextJoined.includes(prevJoined)
+	) {
+		return true;
+	}
+
+	const commonSuffixWords = countCommonSuffixWords(prevWords, nextWords);
+	return (
+		commonSuffixWords >= 3 ||
+		(commonSuffixWords >= 2 &&
+			Math.abs(prevWords.length - nextWords.length) <= 2)
+	);
+}
+
+function pickPreferredEouTranscript(previous: string, next: string): string {
+	if (!previous) {
+		return next;
+	}
+
+	const previousWords = collapseRepeatedWords(tokenizeTranscript(previous));
+	const nextWords = collapseRepeatedWords(tokenizeTranscript(next));
+
+	if (nextWords.length > previousWords.length) {
+		return next;
+	}
+	if (nextWords.length < previousWords.length) {
+		return previous;
+	}
+
+	return next.length >= previous.length ? next : previous;
 }
 
 function hasTerminalPunctuation(text: string): boolean {
@@ -219,6 +517,7 @@ function resetLiveAudioBuffer() {
 	liveLastDecodeAt = 0;
 	liveEouCandidateTranscript = "";
 	liveEouCandidateCount = 0;
+	liveFirstEouAt = 0;
 }
 
 function concatenateAudioChunks(
@@ -311,6 +610,8 @@ async function drainSentenceQueue(
 	queue: string[],
 	onAmplitude: (amplitude: number) => void,
 ) {
+	let nextPreparedAudio: Promise<Float32Array | null> | null = null;
+
 	while (queue.length > 0) {
 		if (generation !== turnGeneration) {
 			queue.length = 0;
@@ -323,7 +624,24 @@ async function drainSentenceQueue(
 		}
 
 		setState("speaking");
-		await speak(sentence, onAmplitude);
+		const currentPreparedAudio =
+			nextPreparedAudio ?? synthesizeSpeechAudio(sentence);
+		const nextSentence = normalizeWhitespace(queue[0] ?? "");
+		nextPreparedAudio = nextSentence
+			? synthesizeSpeechAudio(nextSentence)
+			: null;
+
+		try {
+			const preparedAudio = await currentPreparedAudio;
+			if (preparedAudio) {
+				await playSpeechAudio(preparedAudio, onAmplitude);
+			} else {
+				await speak(sentence, onAmplitude);
+			}
+		} catch (error) {
+			console.warn("[VoicePipeline] prefetched PocketTTS audio failed:", error);
+			await speak(sentence, onAmplitude);
+		}
 	}
 }
 
@@ -391,6 +709,9 @@ async function streamAssistantReply(messages: ChatMessage[]): Promise<void> {
 				}
 
 				fullResponse = text || fullResponse;
+				if (!normalizeWhitespace(fullResponse)) {
+					fullResponse = "I didn't fully catch that. Could you say it one more time?";
+				}
 				conversationStore.updateLastAssistantMessage(fullResponse);
 
 				if (llmMode === "non-streaming") {
@@ -407,6 +728,13 @@ async function streamAssistantReply(messages: ChatMessage[]): Promise<void> {
 						speechQueue.push(tail);
 						sentenceBuffer = "";
 						maybeStartSpeech();
+					} else {
+						const fallbackUtterance = normalizeWhitespace(fullResponse);
+						if (fallbackUtterance && isMeaningfulText(fallbackUtterance)) {
+							speechQueue.push(fallbackUtterance);
+							sentenceBuffer = "";
+							maybeStartSpeech();
+						}
 					}
 				}
 
@@ -450,13 +778,37 @@ async function processTranscript(transcript: string): Promise<void> {
 
 	const { userName } = useAppStore.getState();
 	const conversationStore = useConversationStore.getState();
+	const todayKey = getLocalDateKey();
 
 	conversationStore.addMessage({ role: "user", text: cleanTranscript });
 
-	const memories = await getTopMemories(10);
+	const memoriesPromise = getTopMemories(10);
 	await ensureSurveyStoreHydrated();
+	const surveyState = useSurveyStore.getState();
+	const selfReportedScores = surveyState.surveyHistory[todayKey];
+	const prePromptWellbeingContext = getStoredWellbeingContext(todayKey, null);
+	const wellbeingEvaluationPromise = startVoiceWellbeingEvaluation({
+		todayKey,
+		messages: [...conversationStore.messages],
+		selfReportedScores,
+		currentAggregatedScores: prePromptWellbeingContext.todayAggregatedScores,
+		recentAggregatedHistory: prePromptWellbeingContext.aggregatedHistory,
+	});
+
+	await wellbeingEvaluationPromise;
+	const wellbeingContext = getStoredWellbeingContext(todayKey, null);
+	const shouldAcknowledgeCompletion =
+		wellbeingContext.shouldAcknowledgeCompletion;
+	if (shouldAcknowledgeCompletion) {
+		useSurveyStore.getState().setAiAssessmentStatus(todayKey, {
+			complete: true,
+			acknowledged: true,
+		});
+	}
+
+	const memories = await memoriesPromise;
 	const recentSurveyContext = formatRecentSurveyContext(
-		useSurveyStore.getState().surveyHistory,
+		wellbeingContext.aggregatedHistory,
 	);
 	const systemPrompt = buildSystemPrompt(
 		userName ?? "friend",
@@ -465,6 +817,28 @@ async function processTranscript(transcript: string): Promise<void> {
 	);
 	const messages: ChatMessage[] = [
 		{ role: "system", content: systemPrompt },
+		{
+			role: "system",
+			content: [
+				`Today's self-reported scores: ${formatScoreSnapshot(
+					wellbeingContext.todaySelfScores,
+				)}.`,
+				`Today's AI-evaluated scores: ${formatScoreSnapshot(
+					wellbeingContext.todayAiScores,
+				)}.`,
+				`Today's aggregated wellbeing scores: ${formatScoreSnapshot(
+					wellbeingContext.todayAggregatedScores,
+				)}.`,
+				wellbeingContext.priorityDomain
+					? `In this next reply, prioritize deeper exploration of ${formatScoreBucketLabel(
+							wellbeingContext.priorityDomain,
+						)} with one open-ended question. Do not repeat the survey form wording.`
+					: "If all key domains are already well understood, respond naturally without forcing another assessment question.",
+				shouldAcknowledgeCompletion
+					? "Briefly let the user know you have what you need for today's wellbeing picture, then continue warmly and naturally."
+					: "Do not say you are scoring them or mention hidden internal evaluation.",
+			].join(" "),
+		},
 		...conversationStore.messages
 			.filter(
 				(message) => message.role === "user" || message.role === "assistant",
@@ -611,27 +985,49 @@ function maybeDecodeLiveUtterance(trigger: "periodic" | "silence") {
 		if (text && sttResult.endOfUtterance) {
 			const stabilizedAgainstPrevious =
 				liveEouCandidateCount > 0 &&
-				(text === liveEouCandidateTranscript ||
-					text.startsWith(liveEouCandidateTranscript) ||
-					liveEouCandidateTranscript.startsWith(text));
+				areEouCandidatesCompatible(liveEouCandidateTranscript, text);
 			if (stabilizedAgainstPrevious) {
 				liveEouCandidateCount += 1;
+				liveEouCandidateTranscript = pickPreferredEouTranscript(
+					liveEouCandidateTranscript,
+					text,
+				);
 			} else {
 				liveEouCandidateTranscript = text;
 				liveEouCandidateCount = 1;
+				liveFirstEouAt = Date.now();
+			}
+
+			if (!liveFirstEouAt) {
+				liveFirstEouAt = Date.now();
 			}
 
 			console.log(
 				`[Parakeet] EOU candidate count=${liveEouCandidateCount} text="${text.slice(0, 120)}"`,
 			);
 
-			if (liveEouCandidateCount >= 2) {
+			const silenceAfterEouMs = Date.now() - liveLastVoiceAt;
+			const eouStableMs = Date.now() - liveFirstEouAt;
+			const eouWordCount = collapseRepeatedWords(
+				tokenizeTranscript(liveEouCandidateTranscript),
+			).length;
+			if (
+				(trigger === "silence" && liveEouCandidateCount >= 1) ||
+				(liveEouCandidateCount >= 2 &&
+					silenceAfterEouMs >= LIVE_EOU_SILENCE_CONFIRM_MS &&
+					eouStableMs >= LIVE_EOU_STABILITY_MS) ||
+				(liveEouCandidateCount >= 3 &&
+					eouStableMs >= LIVE_PERSISTENT_EOU_FLUSH_MS &&
+					eouWordCount >= LIVE_PERSISTENT_EOU_MIN_WORDS)
+			) {
+				pendingTranscript = liveEouCandidateTranscript;
 				await flushLiveTranscript("parakeet-eou");
 				return;
 			}
 		} else if (text) {
 			liveEouCandidateTranscript = "";
 			liveEouCandidateCount = 0;
+			liveFirstEouAt = 0;
 		}
 	})()
 		.catch((error) => {
@@ -869,6 +1265,7 @@ export async function startListening(): Promise<void> {
 
 export async function stopListening(): Promise<void> {
 	passiveListeningEnabled = false;
+	turnGeneration += 1;
 	clearPendingUtterance();
 	nativeChunkSubscription?.remove();
 	nativeChunkSubscription = null;
@@ -878,6 +1275,7 @@ export async function stopListening(): Promise<void> {
 	liveVadStream = null;
 	liveChunkQueue = Promise.resolve();
 	resetLiveAudioBuffer();
+	stopSpeaking();
 
 	if (Platform.OS === "ios" && isNativeAudioCaptureAvailable()) {
 		try {
@@ -889,9 +1287,7 @@ export async function stopListening(): Promise<void> {
 		await cancelRecording();
 	} catch {}
 
-	if (currentState !== "processing" && currentState !== "speaking") {
-		setState("idle");
-	}
+	setState("idle");
 }
 
 export function cancelTurn(): void {
@@ -918,8 +1314,13 @@ export async function runCheckIn(): Promise<void> {
 	const conversationStore = useConversationStore.getState();
 	const memories = await getTopMemories(10);
 	await ensureSurveyStoreHydrated();
+	await flushPendingWellbeingEvaluation(getLocalDateKey());
+	const surveyState = useSurveyStore.getState();
 	const recentSurveyContext = formatRecentSurveyContext(
-		useSurveyStore.getState().surveyHistory,
+		buildAggregatedSurveyHistory(
+			surveyState.surveyHistory,
+			surveyState.aiSurveyHistory,
+		),
 	);
 	const systemPrompt = buildSystemPrompt(
 		userName ?? "friend",
@@ -943,6 +1344,78 @@ export async function runCheckIn(): Promise<void> {
 		await streamAssistantReply(checkInMessages);
 	} catch (error) {
 		handlePipelineError("[VoicePipeline] Check-in error:", error);
+	}
+}
+
+export async function runVoiceWelcome(): Promise<void> {
+	if (currentState !== "idle") {
+		return;
+	}
+
+	const conversationStore = useConversationStore.getState();
+	if (conversationStore.messages.length > 0) {
+		return;
+	}
+
+	const { userName } = useAppStore.getState();
+	const memories = await getTopMemories(10);
+	await ensureSurveyStoreHydrated();
+	const todayKey = getLocalDateKey();
+	await flushPendingWellbeingEvaluation(todayKey);
+	const wellbeingContext = getStoredWellbeingContext(todayKey, null);
+	const recentSurveyContext = formatRecentSurveyContext(
+		wellbeingContext.aggregatedHistory,
+	);
+	const systemPrompt = buildSystemPrompt(
+		userName ?? "friend",
+		memories,
+		recentSurveyContext,
+	);
+	if (wellbeingContext.shouldAcknowledgeCompletion) {
+		useSurveyStore.getState().setAiAssessmentStatus(todayKey, {
+			complete: true,
+			acknowledged: true,
+		});
+	}
+	const voiceWelcomeMessages: ChatMessage[] = [
+		{ role: "system", content: systemPrompt },
+		{
+			role: "system",
+			content: [
+				`Current self-reported scores today: ${formatScoreSnapshot(
+					wellbeingContext.todaySelfScores,
+				)}.`,
+				`Current AI-evaluated scores today: ${formatScoreSnapshot(
+					wellbeingContext.todayAiScores,
+				)}.`,
+				`Current aggregated wellbeing scores today: ${formatScoreSnapshot(
+					wellbeingContext.todayAggregatedScores,
+				)}.`,
+				wellbeingContext.priorityDomain
+					? `Open by gently probing ${formatScoreBucketLabel(
+							wellbeingContext.priorityDomain,
+						)} first with an open-ended question that goes deeper than the survey form.`
+					: "Open with the single question most likely to reveal mood, worry, sleep, physical recovery, or support in a natural way.",
+				wellbeingContext.shouldAcknowledgeCompletion
+					? "Briefly let the user know you already have what you need for today's wellbeing picture, then continue warmly and naturally."
+					: "Do not mention hidden internal scoring.",
+			].join(" "),
+		},
+		{
+			role: "user",
+			content:
+				"The user just opened the voice agent. Start with one warm, proactive message that gently guides the conversation toward today's wellbeing picture. Do not repeat the exact survey wording. Ask one open-ended question that invites a deeper answer and helps complete today's hidden wellbeing scoring. Keep it natural, spoken, and under 3 sentences.",
+		},
+	];
+
+	conversationStore.clearSession();
+	conversationStore.addMessage({ role: "assistant", text: "" });
+	setState("processing");
+
+	try {
+		await streamAssistantReply(voiceWelcomeMessages);
+	} catch (error) {
+		handlePipelineError("[VoicePipeline] Voice welcome error:", error);
 	}
 }
 

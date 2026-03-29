@@ -26,7 +26,7 @@ import {
 	initSileroVadRuntime,
 } from "@/services/voice/silero-vad-runtime";
 import { initSTT, resetSTT } from "@/services/voice/stt-engine";
-import { initTTS, speak } from "@/services/voice/tts-engine";
+import { initTTS, speak, stopSpeaking } from "@/services/voice/tts-engine";
 import { getCurrentWeeksPostpartum, useAppStore } from "@/state/app-state";
 import { useOrbStore } from "@/state/orb-state";
 
@@ -222,6 +222,8 @@ export default function FirstConversationScreen() {
 		return () => {
 			cancelRef.current.cancelled = true;
 			runStartedRef.current = false;
+			stopSpeaking();
+			setOrbState("idle");
 		};
 	}, [
 		onboardingMemories,

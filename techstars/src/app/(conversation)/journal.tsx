@@ -5,7 +5,11 @@ import { Fonts } from "@/constants/theme";
 import { APP_BACKGROUND, ReEntryColors } from "@/constants/vela-colors";
 import { computeRecoveryScore } from "@/services/recovery-score-service";
 import { getCurrentWeeksPostpartum, useAppStore } from "@/state/app-state";
-import { getSortedSurveyDates, useSurveyStore } from "@/state/survey-state";
+import {
+	buildAggregatedSurveyHistory,
+	getSortedSurveyDates,
+	useSurveyStore,
+} from "@/state/survey-state";
 
 function formatRelativeDate(dateKey: string): string {
 	const today = new Date();
@@ -50,14 +54,22 @@ function getReflectionText(score: number): string {
 export default function JournalScreen() {
 	const weeksPostpartum = useAppStore((s) => getCurrentWeeksPostpartum(s));
 	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
+	const aiSurveyHistory = useSurveyStore((s) => s.aiSurveyHistory);
 	const summaryHistory = useSurveyStore((s) => s.summaryHistory);
-	const dates = getSortedSurveyDates(surveyHistory).reverse();
+	const aggregatedSurveyHistory = buildAggregatedSurveyHistory(
+		surveyHistory,
+		aiSurveyHistory,
+	);
+	const dates = getSortedSurveyDates(aggregatedSurveyHistory).reverse();
 	const recentDates = dates.slice(0, 7);
 
 	const weekScores = recentDates
 		.map(
 			(date) =>
-				computeRecoveryScore(surveyHistory[date] ?? {}, weeksPostpartum)
+				computeRecoveryScore(
+					aggregatedSurveyHistory[date] ?? {},
+					weeksPostpartum,
+				)
 					?.overall ?? null,
 		)
 		.filter((s): s is number => s !== null);
@@ -112,7 +124,7 @@ export default function JournalScreen() {
 						</Animated.View>
 					) : (
 						recentDates.map((dateKey, index) => {
-							const scores = surveyHistory[dateKey] ?? {};
+							const scores = aggregatedSurveyHistory[dateKey] ?? {};
 							const overall =
 								computeRecoveryScore(scores, weeksPostpartum)?.overall ?? null;
 							const displayDate = formatRelativeDate(dateKey);

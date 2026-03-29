@@ -1,3 +1,4 @@
+import { fetch as expoFetch } from "expo/fetch";
 import {
 	executeToolCall,
 	TOOL_DEFINITIONS,
@@ -41,6 +42,16 @@ interface GroqResponseChunk {
 			tool_calls?: ToolCall[];
 		};
 	}[];
+}
+
+interface StructuredOutputRequest {
+	model?: string;
+	messages: ChatMessage[];
+	schemaName: string;
+	schema: Record<string, unknown>;
+	strict?: boolean;
+	maxCompletionTokens?: number;
+	temperature?: number;
 }
 
 function getApiKey(): string {
@@ -92,7 +103,7 @@ async function requestChatCompletion(
 	messages: ChatMessage[],
 	stream: boolean,
 ) {
-	return fetch(GROQ_API_URL, {
+	return expoFetch(GROQ_API_URL, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -298,4 +309,47 @@ export async function chatOnce(messages: ChatMessage[]): Promise<string> {
 		choices: { message: { content: string } }[];
 	};
 	return data.choices[0]?.message?.content ?? "";
+}
+
+export async function chatStructuredOnce<T>(
+	request: StructuredOutputRequest,
+): Promise<T> {
+	const key = getApiKey();
+
+	const response = await expoFetch(GROQ_API_URL, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${key}`,
+		},
+		body: JSON.stringify({
+			model: request.model ?? "openai/gpt-oss-20b",
+			messages: request.messages,
+			max_completion_tokens: request.maxCompletionTokens ?? 500,
+			temperature: request.temperature ?? 0,
+			response_format: {
+				type: "json_schema",
+				json_schema: {
+					name: request.schemaName,
+					strict: request.strict ?? true,
+					schema: request.schema,
+				},
+			},
+		}),
+	});
+
+	if (!response.ok) {
+		const err = await response.text();
+		throw new Error(`Groq structured output error ${response.status}: ${err}`);
+	}
+
+	const data = (await response.json()) as {
+		choices?: { message?: { content?: string | null } }[];
+	};
+	const content = data.choices?.[0]?.message?.content;
+	if (!content) {
+		throw new Error("Groq structured output returned no content");
+	}
+
+	return JSON.parse(content) as T;
 }

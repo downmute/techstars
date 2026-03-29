@@ -1,7 +1,11 @@
-import { makeRedirectUri, useAuthRequest } from "expo-auth-session";
+import {
+	exchangeCodeAsync,
+	makeRedirectUri,
+	useAuthRequest,
+} from "expo-auth-session";
 import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
 	ActivityIndicator,
 	Pressable,
@@ -13,6 +17,7 @@ import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Fonts } from "@/constants/theme";
 import { ReEntryColors } from "@/constants/vela-colors";
+import { getCalendarEvents } from "@/services/calendar/calendar-service";
 import { useAppStore } from "@/state/app-state";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -98,7 +103,16 @@ const backStyles = StyleSheet.create({
 });
 
 export default function CalendarScreen() {
+	const onboardingComplete = useAppStore((s) => s.onboardingComplete);
+	const googleAccessToken = useAppStore((s) => s.googleAccessToken);
 	const setGoogleAccessToken = useAppStore((s) => s.setGoogleAccessToken);
+	const setCalendarEvents = useAppStore((s) => s.setCalendarEvents);
+	const setCalendarLastFetched = useAppStore((s) => s.setCalendarLastFetched);
+	const setCalendarRecommendation = useAppStore(
+		(s) => s.setCalendarRecommendation,
+	);
+	const [isVerifyingConnection, setIsVerifyingConnection] = useState(false);
+	const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
 	const googleNativeRedirectScheme =
 		getGoogleIosRedirectScheme(GOOGLE_CLIENT_ID);
@@ -119,21 +133,154 @@ export default function CalendarScreen() {
 				"https://www.googleapis.com/auth/calendar.readonly",
 			],
 			redirectUri,
+			extraParams: {
+				access_type: "offline",
+				prompt: "consent",
+			},
 		},
 		DISCOVERY,
 	);
 
 	useEffect(() => {
-		if (response?.type === "success") {
-			const token = response.authentication?.accessToken;
-			if (token) {
-				setGoogleAccessToken(token);
+		let cancelled = false;
+
+		async function verifyStoredConnection() {
+			if (!googleAccessToken) {
+				setIsVerifyingConnection(false);
+				setStatusMessage("Google Calendar is not connected yet.");
+				return;
 			}
-			router.push("/onboarding/first-conversation");
+
+			setIsVerifyingConnection(true);
+			const result = await getCalendarEvents(
+				googleAccessToken,
+				24,
+				() => setGoogleAccessToken(null),
+				{ allowMockFallback: false },
+			);
+
+			if (cancelled) {
+				return;
+			}
+
+			if (result.isLive) {
+				setCalendarEvents(result.events);
+				setCalendarLastFetched(new Date().toISOString());
+				setStatusMessage("Calendar connected and ready to use.");
+			} else {
+				setCalendarEvents([]);
+				setCalendarLastFetched(null);
+				setCalendarRecommendation(null);
+				setStatusMessage(
+					result.reason === "token_expired"
+						? "Google Calendar needs to be reconnected."
+						: "Google Calendar is not connected yet.",
+				);
+			}
+
+			setIsVerifyingConnection(false);
 		}
-	}, [response, setGoogleAccessToken]);
+
+		void verifyStoredConnection();
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		googleAccessToken,
+		setCalendarEvents,
+		setCalendarLastFetched,
+		setCalendarRecommendation,
+		setGoogleAccessToken,
+	]);
+
+	useEffect(() => {
+		let cancelled = false;
+
+		async function finalizeGoogleAuth() {
+			if (response?.type !== "success") {
+				if (response?.type === "error") {
+					setStatusMessage("Google Calendar sign-in failed. Please try again.");
+				}
+				return;
+			}
+
+			const code =
+				"params" in response
+					? (response.params as Record<string, string | undefined>)?.code
+					: undefined;
+
+			if (!code || !request?.codeVerifier) {
+				setStatusMessage(
+					"Google Calendar sign-in did not return an authorization code.",
+				);
+				return;
+			}
+
+			setIsVerifyingConnection(true);
+			try {
+				const tokenResponse = await exchangeCodeAsync(
+					{
+						clientId: GOOGLE_CLIENT_ID,
+						code,
+						redirectUri,
+						extraParams: {
+							code_verifier: request.codeVerifier,
+						},
+					},
+					DISCOVERY,
+				);
+
+				if (cancelled) {
+					return;
+				}
+
+				if (tokenResponse.accessToken) {
+					setGoogleAccessToken(tokenResponse.accessToken);
+					setStatusMessage("Calendar linked successfully.");
+				} else {
+					setStatusMessage(
+						"Google Calendar sign-in completed, but no access token was returned.",
+					);
+				}
+			} catch (error) {
+				if (!cancelled) {
+					console.warn("[Calendar] token exchange failed:", error);
+					setStatusMessage(
+						"Google Calendar token exchange failed. Please try again.",
+					);
+				}
+			} finally {
+				if (!cancelled) {
+					setIsVerifyingConnection(false);
+				}
+			}
+		}
+
+		void finalizeGoogleAuth();
+		return () => {
+			cancelled = true;
+		};
+	}, [redirectUri, request?.codeVerifier, response, setGoogleAccessToken]);
+
+	const primaryCtaLabel = useMemo(() => {
+		if (isVerifyingConnection) {
+			return "Checking connection...";
+		}
+		if (googleAccessToken) {
+			return onboardingComplete ? "Back to Home" : "Continue";
+		}
+		return "Skip for now";
+	}, [googleAccessToken, isVerifyingConnection, onboardingComplete]);
 
 	function handleSkip() {
+		if (googleAccessToken) {
+			if (onboardingComplete) {
+				router.replace("/(conversation)");
+				return;
+			}
+			router.push("/onboarding/first-conversation");
+			return;
+		}
 		router.push("/onboarding/first-conversation");
 	}
 
@@ -188,6 +335,21 @@ export default function CalendarScreen() {
 					entering={FadeInDown.delay(400).duration(400)}
 					style={styles.bottomArea}
 				>
+					<View style={styles.statusCard}>
+						<Text style={styles.statusTitle}>
+							{googleAccessToken
+								? "Calendar login saved on this device"
+								: "Calendar not connected yet"}
+						</Text>
+						<Text style={styles.statusText}>
+							{googleAccessToken
+								? "You should only need to reconnect if Google expires access later."
+								: "Connect once to use real Google Calendar events in conversations and recommendations."}
+						</Text>
+						{statusMessage ? (
+							<Text style={styles.statusDetail}>{statusMessage}</Text>
+						) : null}
+					</View>
 					<Pressable
 						style={[styles.connectBtn, !request && styles.btnDisabled]}
 						disabled={!request}
@@ -199,13 +361,15 @@ export default function CalendarScreen() {
 							<>
 								<Text style={styles.connectCheck}>✓</Text>
 								<Text style={styles.connectBtnText}>
-									Connect Google Calendar
+									{googleAccessToken
+										? "Reconnect Google Calendar"
+										: "Connect Google Calendar"}
 								</Text>
 							</>
 						)}
 					</Pressable>
 					<Pressable onPress={handleSkip} style={styles.skipBtn}>
-						<Text style={styles.skipText}>Skip for now</Text>
+						<Text style={styles.skipText}>{primaryCtaLabel}</Text>
 					</Pressable>
 				</Animated.View>
 			</View>
@@ -302,6 +466,35 @@ const styles = StyleSheet.create({
 		paddingBottom: 16,
 		gap: 16,
 		alignItems: "center",
+	},
+	statusCard: {
+		width: "100%",
+		backgroundColor: ReEntryColors.surface,
+		borderRadius: 18,
+		borderWidth: 1,
+		borderColor: ReEntryColors.border,
+		paddingHorizontal: 16,
+		paddingVertical: 14,
+	},
+	statusTitle: {
+		fontFamily: Fonts?.sans,
+		fontSize: 14,
+		fontWeight: "700",
+		color: ReEntryColors.textPrimary,
+		marginBottom: 4,
+	},
+	statusText: {
+		fontFamily: Fonts?.sans,
+		fontSize: 13,
+		lineHeight: 18,
+		color: ReEntryColors.textSecondary,
+	},
+	statusDetail: {
+		marginTop: 8,
+		fontFamily: Fonts?.sans,
+		fontSize: 13,
+		lineHeight: 18,
+		color: ReEntryColors.primary,
 	},
 	connectBtn: {
 		backgroundColor: ReEntryColors.textPrimary,

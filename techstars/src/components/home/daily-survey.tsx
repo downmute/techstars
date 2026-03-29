@@ -19,6 +19,8 @@ import {
 } from "@/services/supabase/recovery-score-supabase";
 import { getCurrentWeeksPostpartum, useAppStore } from "@/state/app-state";
 import {
+	aggregateSurveyScores,
+	buildAggregatedSurveyHistory,
 	getSurveyDateKey,
 	type SurveyScores,
 	useSurveyStore,
@@ -257,6 +259,7 @@ export function DailySurvey() {
 	const upsertSurveyScores = useSurveyStore((s) => s.upsertSurveyScores);
 	const upsertSummary = useSurveyStore((s) => s.upsertSummary);
 	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
+	const aiSurveyHistory = useSurveyStore((s) => s.aiSurveyHistory);
 	const supabaseUserId = useAppStore((s) => s.supabaseUserId);
 	const weeksPostpartum = useAppStore((s) => getCurrentWeeksPostpartum(s));
 	const userName = useAppStore((s) => s.userName);
@@ -267,6 +270,10 @@ export function DailySurvey() {
 
 	const todayKey = getSurveyDateKey();
 	const existingScores = surveyHistory[todayKey];
+	const aggregatedExistingScores = aggregateSurveyScores(
+		existingScores,
+		aiSurveyHistory[todayKey],
+	);
 	const [forceRedo, setForceRedo] = useState(false);
 
 	const [mood, setMood] = useState<number | null>(null);
@@ -312,9 +319,20 @@ export function DailySurvey() {
 
 		upsertSurveyScores(todayKey, scores);
 
-		const updatedHistory = { ...surveyHistory, [todayKey]: scores };
-		const latestRecovery = computeRecoveryScore(scores, weeksPostpartum);
-		const detectedFlags = detectFlags(updatedHistory, hopelessness);
+		const aggregatedScores = aggregateSurveyScores(
+			scores,
+			aiSurveyHistory[todayKey],
+		);
+		const updatedSelfHistory = { ...surveyHistory, [todayKey]: scores };
+		const updatedAggregatedHistory = buildAggregatedSurveyHistory(
+			updatedSelfHistory,
+			aiSurveyHistory,
+		);
+		const latestRecovery = computeRecoveryScore(
+			aggregatedScores,
+			weeksPostpartum,
+		);
+		const detectedFlags = detectFlags(updatedSelfHistory, hopelessness);
 
 		const swallow = (e: unknown) =>
 			console.warn("[Supabase] fire-and-forget failed:", e);
@@ -346,20 +364,20 @@ export function DailySurvey() {
 		setSaveState("saved");
 
 		generateAndStoreSummary({
-			scores,
+			scores: aggregatedScores,
 			recoveryResult: latestRecovery,
 			hardestTag,
-			surveyHistory: updatedHistory,
+			surveyHistory: updatedAggregatedHistory,
 			userName,
 			supabaseUserId,
 			upsertSummary,
 		}).catch(swallow);
 
 		generateAndStoreClinicalSummary({
-			scores,
+			scores: aggregatedScores,
 			recoveryResult: latestRecovery,
 			hardestTag,
-			surveyHistory: updatedHistory,
+			surveyHistory: updatedAggregatedHistory,
 			flags: detectedFlags,
 			weeksPostpartum,
 			rawHopelessness: hopelessness,
@@ -379,7 +397,11 @@ export function DailySurvey() {
 	if (alreadyCompleted) {
 		return (
 			<CompletedSummary
-				scores={existingScores}
+				scores={
+					Object.keys(aggregatedExistingScores).length > 0
+						? aggregatedExistingScores
+						: existingScores
+				}
 				onRedo={() => setForceRedo(true)}
 			/>
 		);
@@ -388,7 +410,11 @@ export function DailySurvey() {
 	if (saveState === "saved" && existingScores) {
 		return (
 			<CompletedSummary
-				scores={existingScores}
+				scores={
+					Object.keys(aggregatedExistingScores).length > 0
+						? aggregatedExistingScores
+						: existingScores
+				}
 				onRedo={() => {
 					setForceRedo(true);
 					setSaveState("idle");

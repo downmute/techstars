@@ -6,6 +6,12 @@ const GOOGLE_CALENDAR_API =
 export interface CalendarResult {
 	events: CalendarEvent[];
 	isLive: boolean;
+	reason?: "not_connected" | "token_expired" | "fetch_failed";
+}
+
+interface CalendarFetchOptions {
+	allowMockFallback?: boolean;
+	rangeMode?: "withinHours" | "endOfDay";
 }
 
 interface GoogleCalendarItem {
@@ -39,14 +45,34 @@ export async function getCalendarEvents(
 	token: string | null,
 	withinHours = 24,
 	onTokenExpired?: () => void,
+	options?: CalendarFetchOptions,
 ): Promise<CalendarResult> {
+	const allowMockFallback = options?.allowMockFallback ?? true;
+	const rangeMode = options?.rangeMode ?? "withinHours";
 	if (!token) {
-		return { events: getMockEvents(withinHours), isLive: false };
+		return allowMockFallback
+			? {
+					events: getMockEvents(withinHours),
+					isLive: false,
+					reason: "not_connected",
+				}
+			: { events: [], isLive: false, reason: "not_connected" };
 	}
 
 	try {
 		const now = new Date();
-		const cutoff = new Date(now.getTime() + withinHours * 60 * 60 * 1000);
+		const cutoff =
+			rangeMode === "endOfDay"
+				? new Date(
+						now.getFullYear(),
+						now.getMonth(),
+						now.getDate(),
+						23,
+						59,
+						59,
+						999,
+					)
+				: new Date(now.getTime() + withinHours * 60 * 60 * 1000);
 
 		const params = new URLSearchParams({
 			timeMin: now.toISOString(),
@@ -62,12 +88,24 @@ export async function getCalendarEvents(
 
 		if (response.status === 401) {
 			onTokenExpired?.();
-			return { events: getMockEvents(withinHours), isLive: false };
+			return allowMockFallback
+				? {
+						events: getMockEvents(withinHours),
+						isLive: false,
+						reason: "token_expired",
+					}
+				: { events: [], isLive: false, reason: "token_expired" };
 		}
 
 		if (!response.ok) {
 			console.warn(`[Calendar] Google API returned ${response.status}`);
-			return { events: getMockEvents(withinHours), isLive: false };
+			return allowMockFallback
+				? {
+						events: getMockEvents(withinHours),
+						isLive: false,
+						reason: "fetch_failed",
+					}
+				: { events: [], isLive: false, reason: "fetch_failed" };
 		}
 
 		const data = (await response.json()) as { items?: GoogleCalendarItem[] };
@@ -78,6 +116,12 @@ export async function getCalendarEvents(
 		return { events, isLive: true };
 	} catch (err) {
 		console.warn("[Calendar] fetch failed, falling back to mock:", err);
-		return { events: getMockEvents(withinHours), isLive: false };
+		return allowMockFallback
+			? {
+					events: getMockEvents(withinHours),
+					isLive: false,
+					reason: "fetch_failed",
+				}
+			: { events: [], isLive: false, reason: "fetch_failed" };
 	}
 }

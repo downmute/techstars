@@ -19,11 +19,22 @@ export type SurveyScores = Partial<Record<SurveyCategory, number>>;
 export type SurveyHistory = Record<string, SurveyScores>;
 
 export type SummaryHistory = Record<string, string>;
+export type AiAssessmentStatus = Record<
+	string,
+	{ complete: boolean; acknowledged: boolean }
+>;
 
 interface SurveyStore {
 	surveyHistory: SurveyHistory;
+	aiSurveyHistory: SurveyHistory;
+	aiAssessmentStatus: AiAssessmentStatus;
 	summaryHistory: SummaryHistory;
 	upsertSurveyScores: (date: string, scores: SurveyScores) => void;
+	upsertAiSurveyScores: (date: string, scores: SurveyScores) => void;
+	setAiAssessmentStatus: (
+		date: string,
+		status: Partial<{ complete: boolean; acknowledged: boolean }>,
+	) => void;
 	upsertSummary: (date: string, text: string) => void;
 	clearSurveyHistory: () => void;
 }
@@ -107,6 +118,59 @@ export function formatRecentSurveyContext(
 	return lines.join("\n");
 }
 
+export function aggregateSurveyScores(
+	selfScores?: SurveyScores | null,
+	aiScores?: SurveyScores | null,
+	weights: { self: number; ai: number } = { self: 0.5, ai: 0.5 },
+): SurveyScores {
+	const aggregated: SurveyScores = {};
+
+	for (const category of surveyCategories) {
+		const selfValue = selfScores?.[category];
+		const aiValue = aiScores?.[category];
+		const hasSelf = typeof selfValue === "number" && Number.isFinite(selfValue);
+		const hasAi = typeof aiValue === "number" && Number.isFinite(aiValue);
+
+		if (hasSelf && hasAi) {
+			const totalWeight = weights.self + weights.ai;
+			aggregated[category] = Math.round(
+				((selfValue * weights.self) + (aiValue * weights.ai)) / totalWeight,
+			);
+		} else if (hasSelf) {
+			aggregated[category] = Math.round(selfValue);
+		} else if (hasAi) {
+			aggregated[category] = Math.round(aiValue);
+		}
+	}
+
+	return aggregated;
+}
+
+export function buildAggregatedSurveyHistory(
+	selfHistory: SurveyHistory,
+	aiHistory: SurveyHistory,
+	weights: { self: number; ai: number } = { self: 0.5, ai: 0.5 },
+): SurveyHistory {
+	const dates = new Set([
+		...Object.keys(selfHistory),
+		...Object.keys(aiHistory),
+	]);
+	const aggregated: SurveyHistory = {};
+
+	for (const date of dates) {
+		const scores = aggregateSurveyScores(
+			selfHistory[date],
+			aiHistory[date],
+			weights,
+		);
+		if (Object.keys(scores).length > 0) {
+			aggregated[date] = scores;
+		}
+	}
+
+	return aggregated;
+}
+
 export async function ensureSurveyStoreHydrated(): Promise<void> {
 	const persistApi = (
 		useSurveyStore as typeof useSurveyStore & {
@@ -131,6 +195,8 @@ export const useSurveyStore = create<SurveyStore>()(
 	persist(
 		(set) => ({
 			surveyHistory: {},
+			aiSurveyHistory: {},
+			aiAssessmentStatus: {},
 			summaryHistory: {},
 			upsertSurveyScores: (date, scores) =>
 				set((state) => ({
@@ -142,6 +208,28 @@ export const useSurveyStore = create<SurveyStore>()(
 						},
 					},
 				})),
+			upsertAiSurveyScores: (date, scores) =>
+				set((state) => ({
+					aiSurveyHistory: {
+						...state.aiSurveyHistory,
+						[date]: {
+							...(state.aiSurveyHistory[date] ?? {}),
+							...scores,
+						},
+					},
+				})),
+			setAiAssessmentStatus: (date, status) =>
+				set((state) => ({
+					aiAssessmentStatus: {
+						...state.aiAssessmentStatus,
+						[date]: {
+							complete: state.aiAssessmentStatus[date]?.complete ?? false,
+							acknowledged:
+								state.aiAssessmentStatus[date]?.acknowledged ?? false,
+							...status,
+						},
+					},
+				})),
 			upsertSummary: (date, text) =>
 				set((state) => ({
 					summaryHistory: {
@@ -149,7 +237,13 @@ export const useSurveyStore = create<SurveyStore>()(
 						[date]: text,
 					},
 				})),
-			clearSurveyHistory: () => set({ surveyHistory: {}, summaryHistory: {} }),
+			clearSurveyHistory: () =>
+				set({
+					surveyHistory: {},
+					aiSurveyHistory: {},
+					aiAssessmentStatus: {},
+					summaryHistory: {},
+				}),
 		}),
 		{
 			name: "@vela/survey-history",
