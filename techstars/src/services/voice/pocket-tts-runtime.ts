@@ -32,6 +32,40 @@ interface OnnxInputMeta {
   elemType: 'float32' | 'int64' | 'bool';
 }
 
+function normalizeSessionInputMetas(
+  metadata: readonly {
+    name: string;
+    isTensor: boolean;
+    type?: string;
+    shape?: readonly (number | string)[];
+  }[]
+): OnnxInputMeta[] {
+  const metas: OnnxInputMeta[] = [];
+
+  for (const meta of metadata) {
+    if (!meta.isTensor) {
+      continue;
+    }
+
+    const elemType: OnnxInputMeta['elemType'] =
+      meta.type === 'int64'
+        ? 'int64'
+        : meta.type === 'bool'
+          ? 'bool'
+          : 'float32';
+
+    metas.push({
+      name: meta.name,
+      elemType,
+      dims: (meta.shape ?? []).map((dim) =>
+        typeof dim === 'number' && Number.isFinite(dim) && dim >= 0 ? dim : 0
+      ),
+    });
+  }
+
+  return metas;
+}
+
 interface SPPiece {
   piece: string;
   score: number;
@@ -88,7 +122,7 @@ class ONNXBackboneAdapter {
   reset() {
     this.state = {};
     for (const { name, dims, elemType } of this.stateMetas) {
-      const count = dims.reduce((acc, dim) => acc * Math.max(1, dim), 1);
+      const count = dims.reduce((acc, dim) => acc * dim, 1);
       this.state[name] =
         elemType === 'int64'
           ? new OrtTensor('int64', new BigInt64Array(count), dims)
@@ -179,7 +213,7 @@ class ONNXMimiDecoder {
   reset() {
     this.state = {};
     for (const { name, dims, elemType } of this.stateMetas) {
-      const count = dims.reduce((acc, dim) => acc * Math.max(1, dim), 1);
+      const count = dims.reduce((acc, dim) => acc * dim, 1);
       this.state[name] =
         elemType === 'int64'
           ? new OrtTensor('int64', new BigInt64Array(count), dims)
@@ -474,6 +508,9 @@ function parseGraphProtoAllInputs(bytes: Uint8Array, start: number, end: number)
   return results;
 }
 
+// Retained for future offline ONNX input introspection if we need to ship
+// precomputed metadata again.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function parseOnnxModelAllInputs(bytes: Uint8Array) {
   let pos = 0;
   while (pos < bytes.length) {
@@ -489,41 +526,6 @@ function parseOnnxModelAllInputs(bytes: Uint8Array) {
     pos = skipProtoField(bytes, pos, wire);
   }
   return [];
-}
-
-const CACHE_VERSION = 2;
-
-async function loadAllInputMetasCached(modelFilePath: string) {
-  const cachePath = modelFilePath.replace(/\.onnx$/i, '.input_shapes.json');
-  try {
-    const cacheInfo = await FileSystem.getInfoAsync(
-      cachePath.startsWith('file://') ? cachePath : `file://${cachePath}`
-    );
-    if (cacheInfo.exists) {
-      const json = await FileSystem.readAsStringAsync(cachePath);
-      const parsed = JSON.parse(json) as
-        | { v: number; metas: OnnxInputMeta[] }
-        | OnnxInputMeta[];
-      const metas = Array.isArray(parsed)
-        ? parsed
-        : parsed.v === CACHE_VERSION
-          ? parsed.metas
-          : null;
-      if (metas) {
-        return metas;
-      }
-    }
-  } catch {}
-
-  const bytes = await readBinaryFile(modelFilePath);
-  const metas = parseOnnxModelAllInputs(bytes);
-  try {
-    await FileSystem.writeAsStringAsync(
-      cachePath,
-      JSON.stringify({ v: CACHE_VERSION, metas })
-    );
-  } catch {}
-  return metas;
 }
 
 function parseSentencePiece(bytes: Uint8Array): SPPiece {
@@ -698,91 +700,144 @@ async function loadReferenceVoice(
 
 let runtime: RuntimeBundle | null = null;
 let initPromise: Promise<boolean> | null = null;
+let initStartedAt = 0;
+const INIT_STALE_AFTER_MS = 15000;
+const INIT_TIMEOUT_MS = 90000;
 
 export async function initPocketTTSRuntime(): Promise<boolean> {
   if (runtime) {
+    console.log('[PocketTTS] runtime already ready');
     return true;
   }
   if (initPromise) {
+    const ageMs = Date.now() - initStartedAt;
+    if (ageMs > INIT_STALE_AFTER_MS) {
+      console.warn(
+        `[PocketTTS] discarding stale init promise after ${Math.round(ageMs / 1000)}s`
+      );
+      initPromise = null;
+    } else {
+    console.log('[PocketTTS] awaiting existing init');
     return initPromise;
+    }
   }
 
-  initPromise = (async () => {
-    try {
-      const textConditionerPath = toNativeFsPath(getModelPath('text_conditioner.onnx'));
-      const backbonePath = toNativeFsPath(getModelPath('flow_lm_main.onnx'));
-      const flowNetPath = toNativeFsPath(getModelPath('flow_lm_flow.onnx'));
-      const mimiDecoderPath = toNativeFsPath(getModelPath('mimi_decoder.onnx'));
-      const mimiEncoderPath = toNativeFsPath(getModelPath('mimi_encoder.onnx'));
-      const tokenizerPath = getModelPath('tokenizer.model');
-      const referenceVoicePath = getModelPath('reference_sample.wav');
+  initStartedAt = Date.now();
+  const currentInitStartedAt = initStartedAt;
 
-      for (const path of [
-        textConditionerPath,
-        backbonePath,
-        flowNetPath,
-        mimiDecoderPath,
-        mimiEncoderPath,
-        tokenizerPath,
-        referenceVoicePath,
-      ]) {
-        await assertFileExists(path);
-      }
+  const baseInitPromise = (async () => {
+    console.log('[PocketTTS] init start');
+    const textConditionerPath = toNativeFsPath(getModelPath('text_conditioner.onnx'));
+    const backbonePath = toNativeFsPath(getModelPath('flow_lm_main.onnx'));
+    const flowNetPath = toNativeFsPath(getModelPath('flow_lm_flow.onnx'));
+    const mimiDecoderPath = toNativeFsPath(getModelPath('mimi_decoder.onnx'));
+    const mimiEncoderPath = toNativeFsPath(getModelPath('mimi_encoder.onnx'));
+    const tokenizerPath = getModelPath('tokenizer.model');
+    const referenceVoicePath = getModelPath('reference_sample.wav');
 
-      const [
-        textConditioner,
-        backboneSession,
-        flowNet,
-        mimiDecoderSession,
-        mimiEncoderSession,
-      ] = await Promise.all([
-        OrtSession.create(textConditionerPath),
-        OrtSession.create(backbonePath),
-        OrtSession.create(flowNetPath),
-        OrtSession.create(mimiDecoderPath),
-        OrtSession.create(mimiEncoderPath),
-      ]);
+    for (const path of [
+      textConditionerPath,
+      backbonePath,
+      flowNetPath,
+      mimiDecoderPath,
+      mimiEncoderPath,
+      tokenizerPath,
+      referenceVoicePath,
+    ]) {
+      await assertFileExists(path);
+    }
+
+    console.log('[PocketTTS] files present, creating ONNX sessions');
+
+    const [
+      textConditioner,
+      backboneSession,
+      flowNet,
+      mimiDecoderSession,
+      mimiEncoderSession,
+    ] = await Promise.all([
+      OrtSession.create(textConditionerPath),
+      OrtSession.create(backbonePath),
+      OrtSession.create(flowNetPath),
+      OrtSession.create(mimiDecoderPath),
+      OrtSession.create(mimiEncoderPath),
+    ]);
 
       const backbone = new ONNXBackboneAdapter(backboneSession);
       const mimiDecoder = new ONNXMimiDecoder(mimiDecoderSession);
       const mimiEncoder = new ONNXMimiEncoder(mimiEncoderSession);
 
-      const [backboneMetas, mimiMetas, tokenizerBytes] = await Promise.all([
-        loadAllInputMetasCached(backbonePath),
-        loadAllInputMetasCached(mimiDecoderPath),
-        readBinaryFile(tokenizerPath),
-      ]);
+      console.log('[PocketTTS] sessions ready, loading tokenizer');
+
+    const tokenizerBytes = await readBinaryFile(tokenizerPath);
+
+      const backboneMetas = normalizeSessionInputMetas(
+        backboneSession.inputMetadata as readonly {
+          name: string;
+          isTensor: boolean;
+          type?: string;
+          shape?: readonly (number | string)[];
+        }[]
+      );
+      const mimiMetas = normalizeSessionInputMetas(
+        mimiDecoderSession.inputMetadata as readonly {
+          name: string;
+          isTensor: boolean;
+          type?: string;
+          shape?: readonly (number | string)[];
+        }[]
+      );
+
+      console.log(
+        `[PocketTTS] discovered state inputs backbone=${backboneMetas.filter((m) => m.name.startsWith('state_')).length} mimi=${mimiMetas.filter((m) => m.name.startsWith('state_')).length}`
+      );
 
       backbone.setAllInputMetas(backboneMetas);
       backbone.reset();
       mimiDecoder.setAllInputMetas(mimiMetas);
       mimiDecoder.reset();
 
-      const pieces = parseTokenizerModel(tokenizerBytes);
-      const { vocab, unkId, maxLen } = buildVocab(pieces);
-      const voice = await loadReferenceVoice(mimiEncoder);
+    const pieces = parseTokenizerModel(tokenizerBytes);
+    const { vocab, unkId, maxLen } = buildVocab(pieces);
+    console.log('[PocketTTS] tokenizer ready, loading reference voice');
+    const voice = await loadReferenceVoice(mimiEncoder);
 
-      runtime = {
-        textConditioner,
-        backbone,
-        flowNet,
-        mimiDecoder,
-        mimiEncoder,
-        vocab,
-        unkId,
-        maxPieceLen: maxLen,
-        voice,
-      };
+    runtime = {
+      textConditioner,
+      backbone,
+      flowNet,
+      mimiDecoder,
+      mimiEncoder,
+      vocab,
+      unkId,
+      maxPieceLen: maxLen,
+      voice,
+    };
 
-      return true;
-    } catch (error) {
+    console.log('[PocketTTS] init complete');
+    return true;
+  })();
+
+  const timeoutPromise = new Promise<boolean>((resolve) => {
+    setTimeout(() => {
+      console.warn(
+        `[PocketTTS] init timed out after ${Math.round(INIT_TIMEOUT_MS / 1000)}s`
+      );
+      resolve(false);
+    }, INIT_TIMEOUT_MS);
+  });
+
+  initPromise = Promise.race([baseInitPromise, timeoutPromise])
+    .catch((error) => {
       console.warn('[PocketTTS] init failed:', error);
       runtime = null;
       return false;
-    } finally {
-      initPromise = null;
-    }
-  })();
+    })
+    .finally(() => {
+      if (initStartedAt === currentInitStartedAt) {
+        initPromise = null;
+      }
+    });
 
   return initPromise;
 }

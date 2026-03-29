@@ -21,6 +21,36 @@ export interface DownloadProgress {
 
 export type ProgressCallback = (progress: DownloadProgress) => void;
 
+function formatMb(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function emitProgress(
+  onProgress: ProgressCallback,
+  model: ModelSpec,
+  modelIndex: number,
+  totalModels: number,
+  downloadedBytes: number,
+  totalBytes: number,
+  modelBytesWritten: number,
+  modelTotalBytes: number,
+  estimatedSecondsRemaining: number | null
+) {
+  onProgress({
+    modelKey: model.key,
+    modelDescription: model.description,
+    modelIndex,
+    totalModels,
+    modelBytesWritten,
+    modelTotalBytes,
+    overallPercent: Math.min(
+      99,
+      Math.round((downloadedBytes / totalBytes) * 100)
+    ),
+    estimatedSecondsRemaining,
+  });
+}
+
 function getMinimumValidBytes(model: ModelSpec): number {
   return Math.max(1024, Math.floor(model.sizeMb * 1024 * 1024 * 0.85));
 }
@@ -83,6 +113,11 @@ export async function downloadAllModels(
   let downloadedBytes = 0;
   const startTime = Date.now();
   const bytesPerSecHistory: number[] = [];
+  const loggedPercents = new Set<string>();
+
+  console.log(
+    `[ModelDownload] Starting download of ${MODEL_REGISTRY.length} files (${formatMb(totalBytes)})`
+  );
 
   for (let i = 0; i < MODEL_REGISTRY.length; i++) {
     const model = MODEL_REGISTRY[i];
@@ -92,21 +127,26 @@ export async function downloadAllModels(
     if (await hasUsableModelFile(model)) {
       const modelBytes = model.sizeMb * 1024 * 1024;
       downloadedBytes += modelBytes;
-      onProgress({
-        modelKey: model.key,
-        modelDescription: model.description,
-        modelIndex: i + 1,
-        totalModels: MODEL_REGISTRY.length,
-        modelBytesWritten: modelBytes,
-        modelTotalBytes: modelBytes,
-        overallPercent: Math.round((downloadedBytes / totalBytes) * 100),
-        estimatedSecondsRemaining: null,
-      });
+      console.log(
+        `[ModelDownload] Reusing ${model.filename} (${i + 1}/${MODEL_REGISTRY.length}, ${formatMb(modelBytes)})`
+      );
+      emitProgress(
+        onProgress,
+        model,
+        i + 1,
+        MODEL_REGISTRY.length,
+        downloadedBytes,
+        totalBytes,
+        modelBytes,
+        modelBytes,
+        null
+      );
       continue;
     }
 
     const existingInfo = await FileSystem.getInfoAsync(path);
     if (existingInfo.exists) {
+      console.log(`[ModelDownload] Removing stale file ${model.filename}`);
       await FileSystem.deleteAsync(path, { idempotent: true });
     }
 
@@ -116,6 +156,23 @@ export async function downloadAllModels(
 
     try {
       const modelStartBytes = downloadedBytes;
+      const modelTotalBytes = model.expectedBytes ?? model.sizeMb * 1024 * 1024;
+
+      console.log(
+        `[ModelDownload] Downloading ${model.filename} (${i + 1}/${MODEL_REGISTRY.length}, ${formatMb(modelTotalBytes)})`
+      );
+
+      emitProgress(
+        onProgress,
+        model,
+        i + 1,
+        MODEL_REGISTRY.length,
+        modelStartBytes,
+        totalBytes,
+        0,
+        modelTotalBytes,
+        null
+      );
 
       const downloadResumable = FileSystem.createDownloadResumable(
         model.url,
@@ -142,26 +199,39 @@ export async function downloadAllModels(
               : null;
           const remaining = totalBytes - currentTotal;
           const eta = avgBps && avgBps > 0 ? remaining / avgBps : null;
+          const pctBucket = `${model.key}:${Math.floor(
+            ((modelTotal > 0 ? modelWritten / modelTotal : 0) * 100) / 10
+          ) * 10}`;
 
-          onProgress({
-            modelKey: model.key,
-            modelDescription: model.description,
-            modelIndex: i + 1,
-            totalModels: MODEL_REGISTRY.length,
-            modelBytesWritten: modelWritten,
-            modelTotalBytes: modelTotal,
-            overallPercent: Math.min(
-              99,
-              Math.round((currentTotal / totalBytes) * 100)
-            ),
-            estimatedSecondsRemaining: eta ? Math.round(eta) : null,
-          });
+          if (!loggedPercents.has(pctBucket)) {
+            loggedPercents.add(pctBucket);
+            console.log(
+              `[ModelDownload] ${model.filename} ${Math.round(
+                modelTotal > 0 ? (modelWritten / modelTotal) * 100 : 0
+              )}% (${formatMb(modelWritten)} / ${formatMb(modelTotal)})`
+            );
+          }
+
+          emitProgress(
+            onProgress,
+            model,
+            i + 1,
+            MODEL_REGISTRY.length,
+            currentTotal,
+            totalBytes,
+            modelWritten,
+            modelTotal,
+            eta ? Math.round(eta) : null
+          );
         }
       );
 
       await downloadResumable.downloadAsync();
 
       if (!(await hasUsableModelFile(model))) {
+        console.warn(
+          `[ModelDownload] ${model.filename} failed validation after download. Deleting and retrying later.`
+        );
         await FileSystem.deleteAsync(path, { idempotent: true });
         return {
           success: false,
@@ -170,12 +240,29 @@ export async function downloadAllModels(
       }
 
       downloadedBytes += model.sizeMb * 1024 * 1024;
+      console.log(
+        `[ModelDownload] Finished ${model.filename} (${i + 1}/${MODEL_REGISTRY.length})`
+      );
+      emitProgress(
+        onProgress,
+        model,
+        i + 1,
+        MODEL_REGISTRY.length,
+        downloadedBytes,
+        totalBytes,
+        modelTotalBytes,
+        modelTotalBytes,
+        null
+      );
     } catch (err) {
       // Clean up partial download
       const pathInfo = await FileSystem.getInfoAsync(path);
       if (pathInfo.exists) {
         await FileSystem.deleteAsync(path, { idempotent: true });
       }
+      console.error(
+        `[ModelDownload] Failed ${model.filename}: ${String(err)}`
+      );
       return {
         success: false,
         error: `Failed to download ${model.description}: ${String(err)}`,
@@ -194,10 +281,22 @@ export async function downloadAllModels(
     estimatedSecondsRemaining: 0,
   });
 
+  console.log('[ModelDownload] All files downloaded successfully');
+
   return { success: true };
 }
 
 export async function clearDownloadedModels(): Promise<void> {
+  const dir = getModelsDir();
+  const dirInfo = await FileSystem.getInfoAsync(dir);
+
+  if (dirInfo.exists) {
+    try {
+      console.log('[ModelDownload] Clearing vela_models directory');
+      await FileSystem.deleteAsync(dir, { idempotent: true });
+    } catch {}
+  }
+
   for (const model of MODEL_REGISTRY) {
     const path = getModelPath(model.filename);
     try {

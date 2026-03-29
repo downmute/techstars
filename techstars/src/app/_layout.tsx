@@ -37,7 +37,7 @@ export default function RootLayout() {
         };
         if (data?.type === 'morning_checkin') {
           setOrbState('checkin');
-          router.replace('/(conversation)');
+          router.replace('/(conversation)/voice');
         }
       }
     );

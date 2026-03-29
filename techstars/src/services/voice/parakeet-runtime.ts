@@ -21,15 +21,21 @@ interface ParakeetConfig {
   maxSymbolsPerStep: number;
 }
 
+export interface ParakeetTranscriptionResult {
+  text: string;
+  sawEou: boolean;
+  sawEob: boolean;
+}
+
 const DEFAULT_CONFIG: ParakeetConfig = {
   sampleRate: STT_SAMPLE_RATE,
   melBins: 128,
   frameShiftSeconds: 0.01,
   subsamplingFactor: 8,
-  vocabSize: 1026,
-  blankId: 1026,
+  vocabSize: 1025,
+  blankId: 1024,
   eouId: 1024,
-  eobId: 1025,
+  eobId: 1024,
   predHidden: 640,
   predLayers: 1,
   maxSymbolsPerStep: 10,
@@ -631,6 +637,31 @@ function argmax(data: Float32Array, count: number) {
   return bestIndex;
 }
 
+function getTensorInputShape(
+  session: OrtSession,
+  inputName: string,
+  fallback: number[]
+) {
+  const metadata = session.inputMetadata as readonly {
+    name: string;
+    isTensor: boolean;
+    shape?: readonly (number | string)[];
+  }[];
+  const meta = metadata.find(
+    (entry) => entry.name === inputName && entry.isTensor
+  );
+  if (!meta?.shape?.length) {
+    return fallback;
+  }
+
+  return meta.shape.map((dim, index) => {
+    if (typeof dim === 'number' && Number.isFinite(dim) && dim >= 0) {
+      return dim;
+    }
+    return fallback[index] ?? 1;
+  });
+}
+
 class ParakeetOrtRuntime {
   private readonly melProcessor: JSMelProcessor;
   private readonly encoderAudioInputName: string;
@@ -643,6 +674,8 @@ class ParakeetOrtRuntime {
   private readonly logitsOutputName: string;
   private readonly state1OutputName: string;
   private readonly state2OutputName: string;
+  private readonly decoderState1Shape: number[];
+  private readonly decoderState2Shape: number[];
 
   constructor(
     private readonly encoderSession: OrtSession,
@@ -689,16 +722,28 @@ class ParakeetOrtRuntime {
       : decoderSession.outputNames.find(
           (name) => name.includes('state') && name.endsWith('2')
         ) ?? decoderSession.outputNames[2]!;
+    this.decoderState1Shape = getTensorInputShape(decoderSession, this.decoderState1InputName, [
+      this.config.predLayers,
+      1,
+      this.config.predHidden,
+    ]);
+    this.decoderState2Shape = getTensorInputShape(decoderSession, this.decoderState2InputName, [
+      this.config.predLayers,
+      1,
+      this.config.predHidden,
+    ]);
   }
 
-  async transcribe(audio16k: Float32Array) {
+  async transcribeDetailed(
+    audio16k: Float32Array
+  ): Promise<ParakeetTranscriptionResult> {
     if (audio16k.length < MEL_HOP_LENGTH) {
-      return '';
+      return { text: '', sawEou: false, sawEob: false };
     }
 
     const { features, frameCount, validLength } = this.melProcessor.process(audio16k);
     if (!features.length || frameCount <= 0 || validLength <= 0) {
-      return '';
+      return { text: '', sawEou: false, sawEob: false };
     }
 
     const inputTensor = new OrtTensor('float32', features, [
@@ -747,7 +792,7 @@ class ParakeetOrtRuntime {
       const featureSize = likelyFeatureDim === 1 ? dim1 : dim2;
       const encodedFrames = likelyFeatureDim === 1 ? dim2 : dim1;
       if (!featureSize || !encodedFrames) {
-        return '';
+        return { text: '', sawEou: false, sawEob: false };
       }
 
       const encoderData = tensorDataToFloat32(
@@ -769,20 +814,28 @@ class ParakeetOrtRuntime {
 
       state1 = new OrtTensor(
         'float32',
-        new Float32Array(this.config.predLayers * this.config.predHidden),
-        [this.config.predLayers, 1, this.config.predHidden]
+        new Float32Array(
+          this.decoderState1Shape.reduce((acc, dim) => acc * dim, 1)
+        ),
+        this.decoderState1Shape
       );
       state2 = new OrtTensor(
         'float32',
-        new Float32Array(this.config.predLayers * this.config.predHidden),
-        [this.config.predLayers, 1, this.config.predHidden]
+        new Float32Array(
+          this.decoderState2Shape.reduce((acc, dim) => acc * dim, 1)
+        ),
+        this.decoderState2Shape
       );
 
       const tokenIds: number[] = [];
+      const blankId = this.config.blankId;
       const distributionSize = Math.max(
-        this.tokenizer.vocabSize,
-        this.config.blankId + 1
+        this.config.vocabSize,
+        this.config.blankId + 1,
+        this.tokenizer.vocabSize
       );
+      let sawEou = false;
+      let sawEob = false;
 
       for (let frameIndex = 0; frameIndex < encodedFrames; frameIndex += 1) {
         for (let featureIndex = 0; featureIndex < featureSize; featureIndex += 1) {
@@ -798,7 +851,7 @@ class ParakeetOrtRuntime {
           targetIdBuffer[0] =
             tokenIds.length > 0
               ? tokenIds[tokenIds.length - 1]!
-              : this.config.blankId;
+              : blankId;
           const decoderFeeds: Record<string, OrtTensor> = {
             [this.decoderEncoderInputName]: encoderFrameTensor,
             [this.decoderTargetsInputName]: targetTensor,
@@ -837,7 +890,7 @@ class ParakeetOrtRuntime {
 
           disposeTensor(logitsTensor);
 
-          if (tokenId === this.config.blankId) {
+          if (tokenId === blankId) {
             disposeTensor(nextState1);
             disposeTensor(nextState2);
             break;
@@ -851,11 +904,28 @@ class ParakeetOrtRuntime {
           disposeTensor(prevState2);
 
           tokenIds.push(tokenId);
+          if (tokenId === this.config.eouId) {
+            sawEou = true;
+          }
+          if (tokenId === this.config.eobId) {
+            sawEob = true;
+          }
           emittedOnFrame += 1;
         }
       }
 
-      return this.tokenizer.decode(tokenIds, { skipControlTokens: true }).trim();
+      const text = this.tokenizer.decode(tokenIds, { skipControlTokens: true }).trim();
+      if (text) {
+        console.log(
+          `[Parakeet] decoded tokens=${tokenIds.length} eou=${String(sawEou)} blank=${blankId} dist=${distributionSize} text="${text.slice(0, 120)}"`
+        );
+      }
+
+      return {
+        text,
+        sawEou,
+        sawEob,
+      };
     } finally {
       disposeTensor(inputTensor);
       disposeTensor(encoderLengthTensor);
@@ -875,6 +945,11 @@ class ParakeetOrtRuntime {
         disposeTensor(encoderTensor);
       }
     }
+  }
+
+  async transcribe(audio16k: Float32Array) {
+    const result = await this.transcribeDetailed(audio16k);
+    return result.text;
   }
 
   dispose() {
@@ -908,11 +983,13 @@ export async function initParakeetRuntime(): Promise<boolean> {
     return true;
   }
   if (initPromise) {
+    console.log('[Parakeet] awaiting existing init');
     return initPromise;
   }
 
   initPromise = (async () => {
     try {
+      console.log('[Parakeet] init start');
       const vocabPath = getModelPath('vocab.txt');
       const encoderPath = getModelPath('encoder-model.int8.onnx');
       const decoderPath = getModelPath('decoder_joint-model.int8.onnx');
@@ -923,12 +1000,14 @@ export async function initParakeetRuntime(): Promise<boolean> {
         FileSystem.getInfoAsync(decoderPath),
       ]);
       if (!vocabInfo.exists || !encoderInfo.exists || !decoderInfo.exists) {
+        console.warn('[Parakeet] required files missing');
         return false;
       }
 
-      const [config, tokenizer, encoderSession, decoderSession] = await Promise.all([
-        readConfigOrDefault(),
-        ParakeetTokenizer.fromFile(vocabPath, DEFAULT_CONFIG.blankId),
+      console.log('[Parakeet] files present, creating tokenizer and ONNX sessions');
+      const config = await readConfigOrDefault();
+      const [tokenizer, encoderSession, decoderSession] = await Promise.all([
+        ParakeetTokenizer.fromFile(vocabPath, config.blankId),
         OrtSession.create(encoderPath),
         OrtSession.create(decoderPath),
       ]);
@@ -939,6 +1018,7 @@ export async function initParakeetRuntime(): Promise<boolean> {
         tokenizer,
         config
       );
+      console.log('[Parakeet] init complete');
       return true;
     } catch (error) {
       console.warn('[Parakeet] init failed:', error);
@@ -957,6 +1037,13 @@ export function isParakeetReady() {
 }
 
 export async function transcribeWithParakeet(audioUri: string) {
+  const result = await transcribeWithParakeetDetailed(audioUri);
+  return result.text;
+}
+
+export async function transcribeWithParakeetDetailed(
+  audioUri: string
+): Promise<ParakeetTranscriptionResult> {
   const ready = await initParakeetRuntime();
   if (!ready || !runtime) {
     throw new Error('Parakeet runtime is not ready');
@@ -968,7 +1055,18 @@ export async function transcribeWithParakeet(audioUri: string) {
   const bytes = await readBinaryFile(normalizedUri);
 
   const audio = parseWavToFloat32(bytes, STT_SAMPLE_RATE);
-  return runtime.transcribe(audio);
+  return runtime.transcribeDetailed(audio);
+}
+
+export async function transcribeAudioBufferWithParakeetDetailed(
+  audio: Float32Array
+): Promise<ParakeetTranscriptionResult> {
+  const ready = await initParakeetRuntime();
+  if (!ready || !runtime) {
+    throw new Error('Parakeet runtime is not ready');
+  }
+
+  return runtime.transcribeDetailed(audio);
 }
 
 export function disposeParakeetRuntime() {

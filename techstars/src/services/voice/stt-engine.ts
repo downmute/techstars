@@ -9,11 +9,23 @@
  * - ONNX inference fails
  */
 
-import { initParakeetRuntime, isParakeetReady, transcribeWithParakeet } from './parakeet-runtime';
+import {
+  disposeParakeetRuntime,
+  initParakeetRuntime,
+  isParakeetReady,
+  transcribeAudioBufferWithParakeetDetailed,
+  transcribeWithParakeetDetailed,
+} from './parakeet-runtime';
 const GROQ_WHISPER_URL =
   'https://api.groq.com/openai/v1/audio/transcriptions';
 
 let onnxAvailable = false;
+
+export interface STTResult {
+  text: string;
+  endOfUtterance: boolean;
+  usedFallback: boolean;
+}
 
 async function tryLoadOnnxSession(): Promise<boolean> {
   try {
@@ -26,8 +38,14 @@ async function tryLoadOnnxSession(): Promise<boolean> {
   }
 }
 
-export async function initSTT(): Promise<void> {
+export async function initSTT(): Promise<boolean> {
   onnxAvailable = await tryLoadOnnxSession();
+  return onnxAvailable;
+}
+
+export function resetSTT(): void {
+  disposeParakeetRuntime();
+  onnxAvailable = false;
 }
 
 async function transcribeWithGroqWhisper(audioUri: string): Promise<string> {
@@ -65,22 +83,64 @@ async function transcribeWithGroqWhisper(audioUri: string): Promise<string> {
   return data.text.trim();
 }
 
-export async function transcribe(audioUri: string): Promise<string> {
-  const localReady =
-    onnxAvailable || isParakeetReady() || (await tryLoadOnnxSession());
+function hasTerminalPunctuation(text: string): boolean {
+  return /[.!?…]\s*$/.test(text.trim());
+}
+
+export async function transcribeDetailed(audioUri: string): Promise<STTResult> {
+  const localReady = onnxAvailable || (await tryLoadOnnxSession());
 
   if (localReady) {
     try {
-      const text = await transcribeWithParakeet(audioUri);
-      if (text.trim().length > 0) {
-        return text;
+      const result = await transcribeWithParakeetDetailed(audioUri);
+      if (result.text) {
+        console.log(
+          `[STT] local text="${result.text.slice(0, 120)}" eou=${String(result.sawEou)}`
+        );
       }
-    } catch {
-      // Fall through to Groq Whisper
+      return {
+        text: result.text,
+        endOfUtterance: result.sawEou || hasTerminalPunctuation(result.text),
+        usedFallback: false,
+      };
+    } catch (error) {
+      console.warn('[Parakeet] transcription failed, falling back:', error);
     }
   }
 
-  return transcribeWithGroqWhisper(audioUri);
+  const text = await transcribeWithGroqWhisper(audioUri);
+  console.log(`[STT] fallback text="${text.slice(0, 120)}"`);
+  return {
+    text,
+    endOfUtterance: hasTerminalPunctuation(text),
+    usedFallback: true,
+  };
+}
+
+export async function transcribeAudioBufferDetailed(
+  audio: Float32Array
+): Promise<STTResult> {
+  const localReady = onnxAvailable || (await tryLoadOnnxSession());
+  if (!localReady) {
+    throw new Error('Parakeet runtime is unavailable for live audio buffers');
+  }
+
+  const result = await transcribeAudioBufferWithParakeetDetailed(audio);
+  if (result.text) {
+    console.log(
+      `[STT] live local text="${result.text.slice(0, 120)}" eou=${String(result.sawEou)}`
+    );
+  }
+  return {
+    text: result.text,
+    endOfUtterance: result.sawEou || hasTerminalPunctuation(result.text),
+    usedFallback: false,
+  };
+}
+
+export async function transcribe(audioUri: string): Promise<string> {
+  const result = await transcribeDetailed(audioUri);
+  return result.text;
 }
 
 export { isParakeetReady };

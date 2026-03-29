@@ -44,6 +44,10 @@ export function useVoicePipeline() {
       await initPipeline();
       if (!cancelled) {
         setIsPreparing(false);
+        await startListening();
+        if (!cancelled) {
+          setIsListening(true);
+        }
       }
     }
 
@@ -51,6 +55,8 @@ export function useVoicePipeline() {
 
     return () => {
       cancelled = true;
+      setIsListening(false);
+      void stopListening();
     };
   }, []);
 
@@ -58,17 +64,16 @@ export function useVoicePipeline() {
     if (isPreparing) {
       return;
     }
-    setIsListening(true);
     await startListening();
+    setIsListening(true);
   }
 
   async function handleStopListening() {
-    setIsListening(false);
     await stopListening();
+    setIsListening(false);
   }
 
   function handleCancelTurn() {
-    setIsListening(false);
     cancelTurn();
   }
 

@@ -28,12 +28,29 @@ import {
 } from './wav-utils';
 
 export type AmplitudeCallback = (amplitude: number) => void;
+const POCKET_TTS_SYNTH_TIMEOUT_MS = 20000;
 
 let pocketTTSAvailable = false;
 let activePlayer: AudioPlayer | null = null;
 let activeSubscription: { remove(): void } | null = null;
 let activeAmplitudeInterval: ReturnType<typeof setInterval> | null = null;
 let activeTempFile: string | null = null;
+
+function formatPlaybackStatus(status: AudioStatus): string {
+  return [
+    `loaded=${String(status.isLoaded)}`,
+    `playing=${String(status.playing)}`,
+    `buffering=${String(status.isBuffering)}`,
+    `didJustFinish=${String(status.didJustFinish)}`,
+    `time=${status.currentTime.toFixed(2)}/${status.duration.toFixed(2)}`,
+    `state=${status.playbackState}`,
+    `control=${status.timeControlStatus}`,
+    `wait=${status.reasonForWaitingToPlay || 'none'}`,
+    status.mediaServicesDidReset ? 'mediaReset=true' : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
 
 async function checkPocketTTSModels(): Promise<boolean> {
   const required = [
@@ -175,11 +192,18 @@ async function playPocketTTS(
   clearPlaybackState();
   await cleanupTempFile();
 
+  const estimatedDurationMs = Math.ceil((audio.length / TTS_SAMPLE_RATE) * 1000);
+  console.log(
+    `[PocketTTS] playback prepare samples=${audio.length} durationMs=${estimatedDurationMs}`
+  );
+
+  console.log('[PocketTTS] playback setting audio mode');
   await setAudioModeAsync({
     allowsRecording: false,
     playsInSilentMode: true,
     interruptionMode: 'mixWithOthers',
   });
+  console.log('[PocketTTS] playback audio mode ready');
 
   const wavBytes = float32ToWavBytes(audio, TTS_SAMPLE_RATE);
   const tempFile = `${FileSystem.cacheDirectory}vela_tts_${Date.now()}.wav`;
@@ -189,21 +213,41 @@ async function playPocketTTS(
     { encoding: FileSystem.EncodingType.Base64 }
   );
   activeTempFile = tempFile;
+  console.log(
+    `[PocketTTS] playback wav written path=${tempFile} bytes=${wavBytes.length}`
+  );
 
   startAmplitudePlayback(audio, onAmplitude);
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    const finish = (error?: Error) => {
+    let playbackFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let playbackStartupTimer: ReturnType<typeof setTimeout> | null = null;
+    let statusUpdateCount = 0;
+    let lastStatusFingerprint = '';
+    const finish = (reason: string, error?: Error) => {
       if (settled) {
         return;
       }
       settled = true;
+      if (playbackFallbackTimer) {
+        clearTimeout(playbackFallbackTimer);
+        playbackFallbackTimer = null;
+      }
+      if (playbackStartupTimer) {
+        clearTimeout(playbackStartupTimer);
+        playbackStartupTimer = null;
+      }
       if (activeAmplitudeInterval) {
         clearInterval(activeAmplitudeInterval);
         activeAmplitudeInterval = null;
       }
       onAmplitude?.(0);
+      console.log(
+        error
+          ? `[PocketTTS] playback end reason=${reason} updates=${statusUpdateCount} error=${error.message}`
+          : `[PocketTTS] playback end reason=${reason} updates=${statusUpdateCount}`
+      );
       clearPlaybackState();
       void cleanupTempFile();
       if (error) {
@@ -214,21 +258,88 @@ async function playPocketTTS(
     };
 
     try {
-      const player = createAudioPlayer({ uri: tempFile }, { updateInterval: 100 });
+      const fallbackMs = Math.max(1200, estimatedDurationMs + 600);
+      console.log(
+        `[PocketTTS] playback creating player updateInterval=100 fallbackMs=${fallbackMs}`
+      );
+      const player = createAudioPlayer(
+        { uri: tempFile },
+        { updateInterval: 100, keepAudioSessionActive: true }
+      );
       activePlayer = player;
+      playbackFallbackTimer = setTimeout(() => {
+        console.warn(
+          '[PocketTTS] playback finish event timed out, resolving via fallback'
+        );
+        finish('finish-timeout');
+      }, fallbackMs);
+      playbackStartupTimer = setTimeout(() => {
+        console.warn(
+          '[PocketTTS] playback startup timed out waiting for status update'
+        );
+      }, 1500);
       activeSubscription = player.addListener(
         'playbackStatusUpdate',
         (status: AudioStatus) => {
+          statusUpdateCount += 1;
+          const fingerprint = [
+            status.isLoaded,
+            status.playing,
+            status.isBuffering,
+            status.didJustFinish,
+            status.playbackState,
+            status.timeControlStatus,
+            status.reasonForWaitingToPlay,
+            Math.round(status.currentTime * 10),
+            Math.round(status.duration * 10),
+            status.mediaServicesDidReset ? 'reset' : '',
+          ].join('|');
+          if (playbackStartupTimer) {
+            clearTimeout(playbackStartupTimer);
+            playbackStartupTimer = null;
+          }
+          if (
+            statusUpdateCount <= 8 ||
+            fingerprint !== lastStatusFingerprint ||
+            status.didJustFinish
+          ) {
+            console.log(
+              `[PocketTTS] playback status #${statusUpdateCount} ${formatPlaybackStatus(status)}`
+            );
+            lastStatusFingerprint = fingerprint;
+          }
           if (status.didJustFinish) {
-            finish();
+            finish('didJustFinish');
           }
         }
       );
+      console.log('[PocketTTS] playback calling play()');
       player.play();
+      console.log('[PocketTTS] playback play() returned');
     } catch (error) {
-      finish(error instanceof Error ? error : new Error(String(error)));
+      finish(
+        'play-error',
+        error instanceof Error ? error : new Error(String(error))
+      );
     }
   });
+}
+
+async function synthesizePocketTTSWithTimeout(text: string): Promise<Float32Array> {
+  return Promise.race([
+    synthesizeWithPocketTTS(text),
+    new Promise<Float32Array>((_, reject) => {
+      setTimeout(() => {
+        reject(
+          new Error(
+            `PocketTTS synthesis timed out after ${Math.round(
+              POCKET_TTS_SYNTH_TIMEOUT_MS / 1000
+            )}s`
+          )
+        );
+      }, POCKET_TTS_SYNTH_TIMEOUT_MS);
+    }),
+  ]);
 }
 
 export async function speak(
@@ -240,7 +351,9 @@ export async function speak(
 
   if (localReady) {
     try {
-      const audio = await synthesizeWithPocketTTS(text);
+      console.log(`[PocketTTS] synthesis start chars=${text.length}`);
+      const audio = await synthesizePocketTTSWithTimeout(text);
+      console.log(`[PocketTTS] synthesis complete samples=${audio.length}`);
       if (audio.length > 0) {
         await playPocketTTS(audio, onAmplitude);
         return;

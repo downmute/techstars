@@ -26,7 +26,8 @@ function formatMemoryEntry(entry: MemoryEntry): string {
 
 export function buildSystemPrompt(
   userName: string,
-  memories: MemoryEntry[]
+  memories: MemoryEntry[],
+  recentSurveyContext?: string | null
 ): string {
   const now = new Date();
   const dayName = getDayName(now);
@@ -38,11 +39,17 @@ export function buildSystemPrompt(
       ? `What you know about ${userName}:\n${memories.map(formatMemoryEntry).join('\n')}`
       : `You are just getting to know ${userName}.`;
 
+  const surveyBlock = recentSurveyContext
+    ? `Recent survey scores:\n${recentSurveyContext}`
+    : `Recent survey scores: none recorded yet.`;
+
   return `You are Vela, a warm and caring AI companion for ${userName}.
 
 Today is ${dayName}, ${dateStr}. The time is ${timeStr}.
 
 ${memoryBlock}
+
+${surveyBlock}
 
 How to speak:
 - Use short, clear sentences. Never more than 3 sentences per response unless asked.
@@ -52,6 +59,7 @@ How to speak:
 - If you are unsure about something, ask one simple clarifying question.
 - Never guess or make up health or medical facts.
 - When the user shares something personal, acknowledge it warmly and remember it.
+- Use recent survey scores as background context, but only mention them if they genuinely help the conversation.
 
 You have access to tools to help ${userName}:
 - calendar_get_events: Check their upcoming schedule

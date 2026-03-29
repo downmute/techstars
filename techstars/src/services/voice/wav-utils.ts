@@ -181,6 +181,22 @@ export function float32ToWavBytes(
   return new Uint8Array(buffer);
 }
 
+export function pcm16BytesToFloat32(bytes: Uint8Array): Float32Array {
+  const sampleCount = Math.floor(bytes.byteLength / 2);
+  const output = new Float32Array(sampleCount);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  for (let i = 0; i < sampleCount; i += 1) {
+    output[i] = view.getInt16(i * 2, true) / 32768;
+  }
+
+  return output;
+}
+
+export function decodeBase64Pcm16ToFloat32(base64: string): Float32Array {
+  return pcm16BytesToFloat32(decodeBase64ToBytes(base64));
+}
+
 export function estimateAmplitudeFrames(
   audio: Float32Array,
   windowSize = 1024

@@ -1,7 +1,8 @@
 import { executeToolCall, TOOL_DEFINITIONS, type ToolCall } from './tool-handlers';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const MODEL = 'llama-3.3-70b-versatile';
+const MODEL =
+  process.env.EXPO_PUBLIC_GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -15,6 +16,26 @@ interface StreamCallbacks {
   onToken: (token: string) => void;
   onDone: (fullText: string) => void;
   onError: (error: Error) => void;
+}
+
+interface GroqToolCallDelta {
+  index: number;
+  id?: string;
+  function?: { name?: string; arguments?: string };
+}
+
+interface GroqResponseChunk {
+  choices?: {
+    delta?: {
+      content?: string;
+      tool_calls?: GroqToolCallDelta[];
+    };
+    finish_reason?: string;
+    message?: {
+      content?: string | null;
+      tool_calls?: ToolCall[];
+    };
+  }[];
 }
 
 function getApiKey(): string {
@@ -49,6 +70,33 @@ async function parseSSE(
   }
 }
 
+function buildRequestBody(messages: ChatMessage[], stream: boolean) {
+  return {
+    model: MODEL,
+    messages,
+    tools: TOOL_DEFINITIONS,
+    tool_choice: 'auto',
+    stream,
+    max_completion_tokens: 512,
+    temperature: 0.7,
+  };
+}
+
+async function requestChatCompletion(
+  key: string,
+  messages: ChatMessage[],
+  stream: boolean
+) {
+  return fetch(GROQ_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify(buildRequestBody(messages, stream)),
+  });
+}
+
 // Core streaming chat — handles tool calls recursively
 export async function streamChat(
   messages: ChatMessage[],
@@ -67,22 +115,7 @@ export async function streamChat(
   let toolCallBuffers: Record<string, { name: string; arguments: string }> = {};
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages,
-        tools: TOOL_DEFINITIONS,
-        tool_choice: 'auto',
-        stream: true,
-        max_tokens: 512,
-        temperature: 0.7,
-      }),
-    });
+    const response = await requestChatCompletion(key, messages, true);
 
     if (!response.ok) {
       const err = await response.text();
@@ -90,23 +123,54 @@ export async function streamChat(
     }
 
     if (!response.body) {
-      throw new Error('No response body');
+      console.warn(
+        '[Groq] Streaming response body unavailable in this runtime. Falling back to non-streaming chat completion.'
+      );
+      const fallbackResponse = await requestChatCompletion(key, messages, false);
+      if (!fallbackResponse.ok) {
+        const fallbackErr = await fallbackResponse.text();
+        throw new Error(
+          `Groq API error ${fallbackResponse.status}: ${fallbackErr}`
+        );
+      }
+
+      const payload = (await fallbackResponse.json()) as GroqResponseChunk;
+      const message = payload.choices?.[0]?.message;
+      const content = message?.content ?? '';
+      const responseToolCalls = message?.tool_calls ?? [];
+      console.log(
+        `[Groq] Non-streaming reply received chars=${content.length} toolCalls=${responseToolCalls.length}`
+      );
+
+      if (responseToolCalls.length > 0) {
+        const updatedMessages: ChatMessage[] = [
+          ...messages,
+          { role: 'assistant', content: content ?? '', tool_calls: responseToolCalls },
+        ];
+
+        for (const tc of responseToolCalls) {
+          const result = await executeToolCall(tc);
+          updatedMessages.push({
+            role: 'tool',
+            content: result,
+            tool_call_id: tc.id,
+            name: tc.function.name,
+          });
+        }
+
+        await streamChat(updatedMessages, callbacks, depth + 1);
+        return;
+      }
+
+      if (content) {
+        callbacks.onToken(content);
+      }
+      callbacks.onDone(content);
+      return;
     }
 
     await parseSSE(response.body, (data) => {
-      let chunk: {
-        choices?: {
-          delta?: {
-            content?: string;
-            tool_calls?: {
-              index: number;
-              id?: string;
-              function?: { name?: string; arguments?: string };
-            }[];
-          };
-          finish_reason?: string;
-        }[];
-      };
+      let chunk: GroqResponseChunk;
 
       try {
         chunk = JSON.parse(data);
@@ -172,6 +236,7 @@ export async function streamChat(
       // Recurse to get final response
       await streamChat(updatedMessages, callbacks, depth + 1);
     } else {
+      console.log(`[Groq] Streaming reply complete chars=${accumulatedText.length}`);
       callbacks.onDone(accumulatedText);
     }
   } catch (err) {
@@ -192,7 +257,7 @@ export async function chatOnce(messages: ChatMessage[]): Promise<string> {
     body: JSON.stringify({
       model: MODEL,
       messages,
-      max_tokens: 256,
+      max_completion_tokens: 256,
       temperature: 0.7,
     }),
   });

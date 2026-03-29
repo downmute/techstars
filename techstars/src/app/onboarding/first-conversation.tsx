@@ -16,11 +16,42 @@ import {
   areAllModelsDownloaded,
   type DownloadProgress,
 } from '@/services/models/model-manager';
-import { initSTT, isParakeetReady } from '@/services/voice/stt-engine';
+import { initSTT, resetSTT } from '@/services/voice/stt-engine';
 import { initTTS, speak } from '@/services/voice/tts-engine';
-import { isPocketTTSReady } from '@/services/voice/pocket-tts-runtime';
+import {
+  disposePocketTTSRuntime,
+  isPocketTTSReady,
+} from '@/services/voice/pocket-tts-runtime';
+import {
+  disposeSileroVadRuntime,
+  initSileroVadRuntime,
+} from '@/services/voice/silero-vad-runtime';
 
 type Phase = 'checking' | 'downloading' | 'preparing' | 'greeting';
+const RUNTIME_INIT_TIMEOUT_MS = 120000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs: number
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      }
+    );
+  });
+}
 
 export default function FirstConversationScreen() {
   const [phase, setPhase] = useState<Phase>('checking');
@@ -28,6 +59,7 @@ export default function FirstConversationScreen() {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
   const cancelRef = useRef({ cancelled: false });
+  const runStartedRef = useRef(false);
 
   const userName = useAppStore((s) => s.userName);
   const onboardingMemories = useAppStore((s) => s.onboardingMemories);
@@ -36,6 +68,33 @@ export default function FirstConversationScreen() {
   const setOrbState = useOrbStore((s) => s.setState);
 
   useEffect(() => {
+    async function prepareLocalVoice(): Promise<boolean> {
+      resetSTT();
+      disposePocketTTSRuntime();
+      disposeSileroVadRuntime();
+      console.log('[Onboarding] Preparing local STT runtime...');
+      const sttReady = await withTimeout(initSTT(), 'Parakeet init', RUNTIME_INIT_TIMEOUT_MS);
+      console.log(`[Onboarding] Parakeet ready: ${String(sttReady)}`);
+
+      console.log('[Onboarding] Preparing local VAD runtime...');
+      const vadReady = await withTimeout(
+        initSileroVadRuntime(),
+        'Silero VAD init',
+        RUNTIME_INIT_TIMEOUT_MS
+      );
+      console.log(`[Onboarding] Silero VAD ready: ${String(vadReady)}`);
+
+      console.log('[Onboarding] Preparing local TTS runtime...');
+      const ttsReady = await withTimeout(
+        initTTS().then(() => isPocketTTSReady()),
+        'PocketTTS init',
+        RUNTIME_INIT_TIMEOUT_MS
+      );
+      console.log(`[Onboarding] PocketTTS ready: ${String(ttsReady)}`);
+
+      return sttReady && vadReady && ttsReady;
+    }
+
     async function startGreeting() {
       setPhase('greeting');
       setOrbState('idle');
@@ -57,14 +116,24 @@ export default function FirstConversationScreen() {
     }
 
     async function checkAndDownload() {
+      if (runStartedRef.current) {
+        console.log('[Onboarding] Setup already in progress, skipping duplicate run');
+        return;
+      }
+      runStartedRef.current = true;
       setOrbState('checkin');
 
       const alreadyDownloaded = await areAllModelsDownloaded();
       if (alreadyDownloaded) {
         setModelsDownloaded(true);
         setPhase('preparing');
-        await Promise.all([initSTT(), initTTS()]);
-        if (!isParakeetReady() || !isPocketTTSReady()) {
+        let ready = false;
+        try {
+          ready = await prepareLocalVoice();
+        } catch (error) {
+          console.warn('[Onboarding] Local runtime preparation failed:', error);
+        }
+        if (!ready) {
           await clearDownloadedModels();
           setModelsDownloaded(false);
           setDownloadError(
@@ -91,8 +160,13 @@ export default function FirstConversationScreen() {
 
       setModelsDownloaded(true);
       setPhase('preparing');
-      await Promise.all([initSTT(), initTTS()]);
-      if (!isParakeetReady() || !isPocketTTSReady()) {
+      let ready = false;
+      try {
+        ready = await prepareLocalVoice();
+      } catch (error) {
+        console.warn('[Onboarding] Local runtime preparation failed:', error);
+      }
+      if (!ready) {
         await clearDownloadedModels();
         setModelsDownloaded(false);
         setDownloadError(
@@ -107,6 +181,7 @@ export default function FirstConversationScreen() {
     void checkAndDownload();
     return () => {
       cancelRef.current.cancelled = true;
+      runStartedRef.current = false;
     };
   }, [
     onboardingMemories,

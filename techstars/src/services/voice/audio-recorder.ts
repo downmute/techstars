@@ -1,4 +1,5 @@
 import {
+  IOSOutputFormat,
   RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
@@ -10,12 +11,14 @@ import AudioModule from 'expo-audio/build/AudioModule';
 export interface RecordingResult {
   uri: string;
   durationMs: number;
+  metering?: number;
 }
 
 // Parakeet expects 16kHz mono PCM/WAV, so we start from Expo's preset and
 // tighten the format to match the STT pipeline.
 const RECORDING_OPTIONS: RecordingOptions = {
   ...RecordingPresets.HIGH_QUALITY,
+  isMeteringEnabled: true,
   extension: '.wav',
   sampleRate: 16000,
   numberOfChannels: 1,
@@ -30,6 +33,7 @@ const RECORDING_OPTIONS: RecordingOptions = {
   ios: {
     ...RecordingPresets.HIGH_QUALITY.ios,
     extension: '.wav',
+    outputFormat: IOSOutputFormat.LINEARPCM,
     sampleRate: 16000,
     linearPCMBitDepth: 16,
     linearPCMIsBigEndian: false,
@@ -68,7 +72,9 @@ export async function startRecording(): Promise<void> {
 
   const recording = new AudioModule.AudioRecorder(RECORDING_OPTIONS);
   await recording.prepareToRecordAsync();
+  console.log('[Recorder] prepared');
   recording.record();
+  console.log('[Recorder] started');
   activeRecording = recording;
 }
 
@@ -88,9 +94,16 @@ export async function stopRecording(): Promise<RecordingResult> {
     throw new Error('Recording URI is null');
   }
 
+  console.log(
+    `[Recorder] stopped durationMs=${status.durationMillis ?? 0} metering=${
+      typeof status.metering === 'number' ? status.metering.toFixed(1) : 'n/a'
+    } uri=${uri}`
+  );
+
   return {
     uri,
     durationMs: status.durationMillis ?? 0,
+    metering: typeof status.metering === 'number' ? status.metering : undefined,
   };
 }
 
@@ -104,6 +117,7 @@ export async function cancelRecording(): Promise<void> {
 
   try {
     await recording.stop();
+    console.log('[Recorder] cancelled');
   } catch {
     // Ignore stop failures during cancellation.
   }
