@@ -1,3 +1,4 @@
+import { getLocalDateKey } from "@/lib/date-utils";
 import { supabase } from "@/lib/supabase";
 
 /**
@@ -9,7 +10,7 @@ export async function saveDailySummary(
 	userId: string,
 	summaryText: string,
 ): Promise<boolean> {
-	const today = new Date().toISOString().slice(0, 10);
+	const today = getLocalDateKey();
 
 	const { error } = await supabase.from("daily_summaries").upsert(
 		{
@@ -36,7 +37,7 @@ export async function saveClinicalSummary(
 	userId: string,
 	clinicalText: string,
 ): Promise<boolean> {
-	const today = new Date().toISOString().slice(0, 10);
+	const today = getLocalDateKey();
 
 	const { error } = await supabase.from("daily_summaries").upsert(
 		{

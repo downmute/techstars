@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Sidebar } from "@/components/sidebar";
 import { StatCard } from "@/components/stat-card";
 import { getDailySummaryPanel } from "@/lib/queries";
+import { createClient } from "@/lib/supabase/server";
 
 const statusDot: Record<string, string> = {
 	"on-track": "bg-success",
@@ -39,6 +40,8 @@ interface PageProps {
 }
 
 export default async function DailySummaryPage({ searchParams }: PageProps) {
+	const supabase = await createClient();
+	const { data: { user } } = await supabase.auth.getUser();
 	const params = await searchParams;
 	const today = new Date().toISOString().slice(0, 10);
 	const rawDate = params.date;
@@ -58,7 +61,7 @@ export default async function DailySummaryPage({ searchParams }: PageProps) {
 
 	return (
 		<div className="flex h-screen bg-background">
-			<Sidebar />
+			<Sidebar clinicianEmail={user?.email} clinicName={user?.user_metadata?.clinic_name} />
 			<main className="flex-1 overflow-auto px-8 py-8">
 				<div className="mb-6 flex items-center justify-between">
 					<div className="flex items-center gap-4">

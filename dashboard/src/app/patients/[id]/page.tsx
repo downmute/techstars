@@ -8,12 +8,15 @@ import {
 	getPatientDetail,
 	getPatientPanel,
 } from "@/lib/queries";
+import { createClient } from "@/lib/supabase/server";
 
 interface PageProps {
 	params: Promise<{ id: string }>;
 }
 
 export default async function PatientDetailPage({ params }: PageProps) {
+	const supabase = await createClient();
+	const { data: { user } } = await supabase.auth.getUser();
 	const { id } = await params;
 
 	const panel = await getPatientPanel();
@@ -59,7 +62,7 @@ export default async function PatientDetailPage({ params }: PageProps) {
 
 	return (
 		<div className="flex h-screen bg-background">
-			<Sidebar />
+			<Sidebar clinicianEmail={user?.email} clinicName={user?.user_metadata?.clinic_name} />
 			<main className="flex-1 overflow-auto px-8 py-8">
 				<div className="mb-6 flex items-center gap-2 text-sm text-text-muted">
 					<Link href="/" className="text-primary hover:underline">

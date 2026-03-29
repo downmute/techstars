@@ -12,11 +12,10 @@ import {
 } from "react-native";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-import { ReEntryColors } from "@/constants/vela-colors";
 import { Fonts } from "@/constants/theme";
-import { useAppStore } from "@/state/app-state";
+import { ReEntryColors } from "@/constants/vela-colors";
 import type { DeliveryType, FeedingMethod } from "@/state/app-state";
+import { useAppStore } from "@/state/app-state";
 
 const WEEKS_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const DELIVERY_OPTIONS: { label: string; value: DeliveryType }[] = [
@@ -29,10 +28,7 @@ const FEEDING_OPTIONS: { label: string; value: FeedingMethod }[] = [
 	{ label: "Both", value: "both" },
 ];
 
-function ProgressDots({
-	current,
-	total,
-}: { current: number; total: number }) {
+function ProgressDots({ current, total }: { current: number; total: number }) {
 	return (
 		<View style={progressStyles.row}>
 			{Array.from({ length: total }).map((_, i) => (
@@ -112,10 +108,7 @@ export default function AboutYouScreen() {
 				style={styles.flex}
 				behavior={Platform.OS === "ios" ? "padding" : "height"}
 			>
-				<Animated.View
-					entering={FadeIn.duration(400)}
-					style={styles.topBar}
-				>
+				<Animated.View entering={FadeIn.duration(400)} style={styles.topBar}>
 					<BackButton />
 					<ProgressDots current={1} total={5} />
 					<Text style={styles.stepLabel}>1 of 5</Text>
@@ -162,10 +155,7 @@ export default function AboutYouScreen() {
 									<Pressable
 										key={w}
 										onPress={() => setWeeks(w)}
-										style={[
-											styles.chip,
-											weeks === w && styles.chipActive,
-										]}
+										style={[styles.chip, weeks === w && styles.chipActive]}
 									>
 										<Text
 											style={[

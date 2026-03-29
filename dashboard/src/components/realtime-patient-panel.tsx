@@ -1,26 +1,29 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
-export function RealtimePatientPanel() {
+export function RealtimePatientPanel({ patientIds }: { patientIds: string[] }) {
 	const router = useRouter();
 	const supabase = createClient();
 
 	useEffect(() => {
+		if (patientIds.length === 0) return;
+
+		const filter = `user_id=in.(${patientIds.join(",")})`;
+
 		const channel = supabase
-			.channel("recovery_scores_changes")
+			.channel("clinic_changes")
 			.on(
 				"postgres_changes",
 				{
 					event: "*",
 					schema: "public",
 					table: "recovery_scores",
+					filter,
 				},
-				() => {
-					router.refresh();
-				},
+				() => router.refresh(),
 			)
 			.on(
 				"postgres_changes",
@@ -28,17 +31,16 @@ export function RealtimePatientPanel() {
 					event: "*",
 					schema: "public",
 					table: "flags",
+					filter,
 				},
-				() => {
-					router.refresh();
-				},
+				() => router.refresh(),
 			)
 			.subscribe();
 
 		return () => {
 			supabase.removeChannel(channel);
 		};
-	}, [supabase, router]);
+	}, [supabase, router, patientIds]);
 
 	return null;
 }

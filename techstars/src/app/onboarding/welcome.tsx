@@ -2,9 +2,8 @@ import { router } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-import { ReEntryColors } from "@/constants/vela-colors";
 import { Fonts } from "@/constants/theme";
+import { ReEntryColors } from "@/constants/vela-colors";
 
 export default function WelcomeScreen() {
 	return (

@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Fonts } from "@/constants/theme";
 import { APP_BACKGROUND, ReEntryColors } from "@/constants/vela-colors";
 import { computeRecoveryScore } from "@/services/recovery-score-service";
-import { useAppStore } from "@/state/app-state";
+import { getCurrentWeeksPostpartum, useAppStore } from "@/state/app-state";
 import { getSortedSurveyDates, useSurveyStore } from "@/state/survey-state";
 
 function formatRelativeDate(dateKey: string): string {
@@ -48,7 +48,7 @@ function getReflectionText(score: number): string {
 }
 
 export default function JournalScreen() {
-	const weeksPostpartum = useAppStore((s) => s.weeksPostpartum);
+	const weeksPostpartum = useAppStore((s) => getCurrentWeeksPostpartum(s));
 	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
 	const summaryHistory = useSurveyStore((s) => s.summaryHistory);
 	const dates = getSortedSurveyDates(surveyHistory).reverse();

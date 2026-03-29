@@ -2,6 +2,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { getLocalDateKey } from "@/lib/date-utils";
+
 export const surveyCategories = [
 	"moodDepression",
 	"anxiety",
@@ -34,10 +36,7 @@ type PersistApi = {
 let hydrationPromise: Promise<void> | null = null;
 
 export function getSurveyDateKey(date: Date = new Date()): string {
-	const year = date.getFullYear();
-	const month = String(date.getMonth() + 1).padStart(2, "0");
-	const day = String(date.getDate()).padStart(2, "0");
-	return `${year}-${month}-${day}`;
+	return getLocalDateKey(date);
 }
 
 export function getSortedSurveyDates(history: SurveyHistory): string[] {

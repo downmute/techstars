@@ -30,6 +30,7 @@ interface AppStore {
 	supabaseUserId: string | null;
 
 	weeksPostpartum: number | null;
+	onboardingDate: string | null;
 	deliveryType: DeliveryType | null;
 	feedingMethod: FeedingMethod | null;
 	clinicCode: string | null;
@@ -83,6 +84,7 @@ export const useAppStore = create<AppStore>()(
 			supabaseUserId: null,
 
 			weeksPostpartum: null,
+			onboardingDate: null,
 			deliveryType: null,
 			feedingMethod: null,
 			clinicCode: null,
@@ -112,7 +114,12 @@ export const useAppStore = create<AppStore>()(
 			setNotificationsEnabled: (notificationsEnabled) =>
 				set({ notificationsEnabled }),
 
-			setWeeksPostpartum: (weeksPostpartum) => set({ weeksPostpartum }),
+			setWeeksPostpartum: (weeksPostpartum) =>
+				set({
+					weeksPostpartum,
+					onboardingDate:
+						weeksPostpartum !== null ? new Date().toISOString() : null,
+				}),
 			setDeliveryType: (deliveryType) => set({ deliveryType }),
 			setFeedingMethod: (feedingMethod) => set({ feedingMethod }),
 			setClinicCode: (clinicCode) => set({ clinicCode }),
@@ -141,6 +148,7 @@ export const useAppStore = create<AppStore>()(
 					notificationsEnabled: false,
 					supabaseUserId: null,
 					weeksPostpartum: null,
+					onboardingDate: null,
 					deliveryType: null,
 					feedingMethod: null,
 					clinicCode: null,
@@ -157,3 +165,17 @@ export const useAppStore = create<AppStore>()(
 		},
 	),
 );
+
+export function getCurrentWeeksPostpartum(state: {
+	weeksPostpartum: number | null;
+	onboardingDate: string | null;
+}): number | null {
+	if (state.weeksPostpartum === null || !state.onboardingDate) {
+		return state.weeksPostpartum;
+	}
+	const onboardedAt = new Date(state.onboardingDate).getTime();
+	const elapsedWeeks = Math.floor(
+		(Date.now() - onboardedAt) / (7 * 24 * 60 * 60 * 1000),
+	);
+	return state.weeksPostpartum + elapsedWeeks;
+}

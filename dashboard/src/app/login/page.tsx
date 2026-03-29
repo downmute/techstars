@@ -30,11 +30,10 @@ export default function LoginPage() {
 				});
 				if (signInError) throw signInError;
 			} else {
-				const { error: signUpError } = await supabase.auth.signUp({
-					email,
-					password,
-					options: { data: { role: "clinician" } },
-				});
+			const { error: signUpError } = await supabase.auth.signUp({
+				email,
+				password,
+			});
 				if (signUpError) throw signUpError;
 
 				const { data: session } = await supabase.auth.getSession();

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { LogoutButton } from "./logout-button";
 
 const navItems = [
 	{ label: "Patients", href: "/", icon: "patients" },
@@ -121,7 +122,12 @@ function NavIcon({ type, active }: { type: string; active: boolean }) {
 	}
 }
 
-export function Sidebar() {
+interface SidebarProps {
+	clinicianEmail?: string;
+	clinicName?: string;
+}
+
+export function Sidebar({ clinicianEmail, clinicName }: SidebarProps) {
 	const pathname = usePathname();
 
 	return (
@@ -157,10 +163,11 @@ export function Sidebar() {
 				})}
 			</nav>
 
-			<div className="border-t border-white/10 pt-4">
-				<p className="text-sm text-sidebar-text">Dr. Sarah Kim</p>
-				<p className="text-xs text-text-muted">Bloom OB/GYN</p>
-			</div>
+		<div className="border-t border-white/10 pt-4">
+			<p className="text-sm text-sidebar-text">{clinicianEmail ?? "Clinician"}</p>
+			<p className="text-xs text-text-muted">{clinicName ?? "ReEntry Clinic"}</p>
+			<LogoutButton />
+		</div>
 		</aside>
 	);
 }

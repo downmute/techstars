@@ -66,17 +66,26 @@ export async function getPatientPanel(): Promise<PanelPatient[]> {
 		return [];
 	}
 
+	const sortedRows = [...panelRows].sort((a, b) =>
+		(a.patient_id as string).localeCompare(b.patient_id as string),
+	);
+
+	const trendPromises = sortedRows.map((row) =>
+		supabase.rpc("get_patient_trend", {
+			p_patient_id: row.patient_id,
+			p_limit: 7,
+		}),
+	);
+	const trendResults = await Promise.all(trendPromises);
+
 	const patients: PanelPatient[] = [];
 
-	for (let i = 0; i < panelRows.length; i++) {
-		const row = panelRows[i];
+	for (let i = 0; i < sortedRows.length; i++) {
+		const row = sortedRows[i];
 		const score = row.overall_score ? Number(row.overall_score) : 0;
 		const flags = Number(row.active_flags ?? 0);
 
-		const { data: trendRows } = await supabase.rpc("get_patient_trend", {
-			p_patient_id: row.patient_id,
-			p_limit: 7,
-		});
+		const { data: trendRows } = trendResults[i];
 
 		const trend = (trendRows ?? [])
 			.reverse()
@@ -346,8 +355,11 @@ export async function getDailySummaryPanel(
 
 	const patientIndex = new Map<string, number>();
 	if (panelRows) {
-		for (let i = 0; i < panelRows.length; i++) {
-			patientIndex.set(panelRows[i].patient_id as string, i + 1);
+		const sortedPanelRows = [...panelRows].sort((a, b) =>
+			(a.patient_id as string).localeCompare(b.patient_id as string),
+		);
+		for (let i = 0; i < sortedPanelRows.length; i++) {
+			patientIndex.set(sortedPanelRows[i].patient_id as string, i + 1);
 		}
 	}
 
@@ -434,8 +446,11 @@ export async function getWeeklySummary(
 	const { data: panelRows } = await supabase.rpc("get_patient_panel");
 	const patientIndex = new Map<string, number>();
 	if (panelRows) {
-		for (let i = 0; i < panelRows.length; i++) {
-			patientIndex.set(panelRows[i].patient_id as string, i + 1);
+		const sortedPanelRows = [...panelRows].sort((a, b) =>
+			(a.patient_id as string).localeCompare(b.patient_id as string),
+		);
+		for (let i = 0; i < sortedPanelRows.length; i++) {
+			patientIndex.set(sortedPanelRows[i].patient_id as string, i + 1);
 		}
 	}
 
@@ -584,8 +599,11 @@ export async function getAlertsPanel(
 	const { data: panelRows } = await supabase.rpc("get_patient_panel");
 	const patientIndex = new Map<string, number>();
 	if (panelRows) {
-		for (let i = 0; i < panelRows.length; i++) {
-			patientIndex.set(panelRows[i].patient_id as string, i + 1);
+		const sortedPanelRows = [...panelRows].sort((a, b) =>
+			(a.patient_id as string).localeCompare(b.patient_id as string),
+		);
+		for (let i = 0; i < sortedPanelRows.length; i++) {
+			patientIndex.set(sortedPanelRows[i].patient_id as string, i + 1);
 		}
 	}
 

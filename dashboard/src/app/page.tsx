@@ -3,8 +3,11 @@ import { RealtimePatientPanel } from "@/components/realtime-patient-panel";
 import { Sidebar } from "@/components/sidebar";
 import { StatCard } from "@/components/stat-card";
 import { computeStats, getPatientPanel } from "@/lib/queries";
+import { createClient } from "@/lib/supabase/server";
 
 export default async function PatientPanel() {
+	const supabase = await createClient();
+	const { data: { user } } = await supabase.auth.getUser();
 	const patients = await getPatientPanel();
 	const stats = computeStats(patients);
 
@@ -17,8 +20,8 @@ export default async function PatientPanel() {
 
 	return (
 		<div className="flex h-screen bg-background">
-			<RealtimePatientPanel />
-			<Sidebar />
+			<RealtimePatientPanel patientIds={patients.map((p) => p.id)} />
+			<Sidebar clinicianEmail={user?.email} clinicName={user?.user_metadata?.clinic_name} />
 			<main className="flex-1 overflow-auto px-8 py-8">
 				<div className="mb-1 flex items-start justify-between">
 					<div>

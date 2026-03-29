@@ -1,3 +1,4 @@
+import { getLocalDateKey } from "@/lib/date-utils";
 import { supabase } from "@/lib/supabase";
 
 export interface CheckInRow {
@@ -23,7 +24,7 @@ export async function saveCheckIn(
 	userId: string,
 	data: CheckInRow,
 ): Promise<boolean> {
-	const today = new Date().toISOString().slice(0, 10);
+	const today = getLocalDateKey();
 
 	const { error } = await supabase.from("check_ins").upsert(
 		{

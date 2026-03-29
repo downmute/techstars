@@ -3,19 +3,15 @@ import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-import { ReEntryColors } from "@/constants/vela-colors";
 import { Fonts } from "@/constants/theme";
+import { ReEntryColors } from "@/constants/vela-colors";
 import {
 	registerForPushNotificationsAsync,
 	scheduleDailyCheckIn,
 } from "@/services/notifications/notification-service";
 import { useAppStore } from "@/state/app-state";
 
-function ProgressDots({
-	current,
-	total,
-}: { current: number; total: number }) {
+function ProgressDots({ current, total }: { current: number; total: number }) {
 	return (
 		<View style={progressStyles.row}>
 			{Array.from({ length: total }).map((_, i) => (
@@ -70,9 +66,7 @@ function clampHour(h: number): number {
 
 export default function NotificationsScreen() {
 	const setExpoPushToken = useAppStore((s) => s.setExpoPushToken);
-	const setNotificationsEnabled = useAppStore(
-		(s) => s.setNotificationsEnabled,
-	);
+	const setNotificationsEnabled = useAppStore((s) => s.setNotificationsEnabled);
 	const setCheckInTime = useAppStore((s) => s.setCheckInTime);
 
 	const [displayHour, setDisplayHour] = useState(8);
@@ -157,12 +151,7 @@ export default function NotificationsScreen() {
 								onPress={() => setIsAM(true)}
 								style={[styles.ampmChip, isAM && styles.ampmChipActive]}
 							>
-								<Text
-									style={[
-										styles.ampmText,
-										isAM && styles.ampmTextActive,
-									]}
-								>
+								<Text style={[styles.ampmText, isAM && styles.ampmTextActive]}>
 									AM
 								</Text>
 							</Pressable>
@@ -170,12 +159,7 @@ export default function NotificationsScreen() {
 								onPress={() => setIsAM(false)}
 								style={[styles.ampmChip, !isAM && styles.ampmChipActive]}
 							>
-								<Text
-									style={[
-										styles.ampmText,
-										!isAM && styles.ampmTextActive,
-									]}
-								>
+								<Text style={[styles.ampmText, !isAM && styles.ampmTextActive]}>
 									PM
 								</Text>
 							</Pressable>

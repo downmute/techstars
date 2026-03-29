@@ -14,7 +14,7 @@ import {
 	computeRecoveryScore,
 	type RecoveryScoreResult,
 } from "@/services/recovery-score-service";
-import { useAppStore } from "@/state/app-state";
+import { getCurrentWeeksPostpartum, useAppStore } from "@/state/app-state";
 import {
 	getSortedSurveyDates,
 	getSurveyDateKey,
@@ -140,9 +140,25 @@ function formatEventTime(iso: string): string {
 	});
 }
 
+function computeStreak(surveyHistory: Record<string, unknown>): number {
+	const today = new Date();
+	let streak = 0;
+	for (let i = 0; i < 365; i++) {
+		const d = new Date(today);
+		d.setDate(d.getDate() - i);
+		const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+		if (surveyHistory[key]) {
+			streak++;
+		} else {
+			break;
+		}
+	}
+	return streak;
+}
+
 export default function HomeScreen() {
 	const userName = useAppStore((s) => s.userName);
-	const weeksPostpartum = useAppStore((s) => s.weeksPostpartum);
+	const weeksPostpartum = useAppStore((s) => getCurrentWeeksPostpartum(s));
 	const googleAccessToken = useAppStore((s) => s.googleAccessToken);
 	const calendarEvents = useAppStore((s) => s.calendarEvents);
 	const calendarRecommendation = useAppStore((s) => s.calendarRecommendation);
@@ -172,7 +188,46 @@ export default function HomeScreen() {
 			? currentScore - previousScore
 			: null;
 
-	const streakCount = dates.length;
+	let trendMessage = "Keep tracking to see your progress.";
+	let titleMessage = "Your recovery journey";
+
+	if (currentScore !== null && dates.length >= 2) {
+		const recentDates = dates.slice(-7, -1);
+		const recentScores = recentDates
+			.map((d) => {
+				const s = surveyHistory[d];
+				if (!s) return null;
+				const vals = Object.values(s).filter(
+					(v): v is number => typeof v === "number",
+				);
+				return vals.length > 0
+					? vals.reduce((a, b) => a + b, 0) / vals.length
+					: null;
+			})
+			.filter((v): v is number => v !== null);
+
+		if (recentScores.length > 0) {
+			const avgPrevious =
+				recentScores.reduce((a, b) => a + b, 0) / recentScores.length;
+			const diff = currentScore - avgPrevious;
+			if (diff > 5) {
+				titleMessage = "You're doing well";
+				trendMessage = "Recovery trending up this week.";
+			} else if (diff < -5) {
+				titleMessage = "Hang in there";
+				trendMessage =
+					"Recovery has dipped — that's okay, it's part of the journey.";
+			} else {
+				titleMessage = "Staying steady";
+				trendMessage = "Your recovery is holding stable.";
+			}
+		}
+	} else if (currentScore === null) {
+		titleMessage = "Start tracking";
+		trendMessage = "Complete your first check-in to see progress.";
+	}
+
+	const streakCount = computeStreak(surveyHistory);
 	const firstName = userName?.trim()?.split(" ")[0] || "there";
 	const hasFetchedRef = useRef(false);
 
@@ -251,16 +306,8 @@ export default function HomeScreen() {
 						<View style={styles.progressRow}>
 							<RecoveryRing score={currentScore} />
 							<View style={styles.progressInfo}>
-								<Text style={styles.progressTitle}>
-									{currentScore !== null
-										? "You're doing well"
-										: "Start tracking"}
-								</Text>
-								<Text style={styles.progressBody}>
-									{currentScore !== null
-										? "Recovery trending up this week."
-										: "Complete your first check-in to see progress."}
-								</Text>
+								<Text style={styles.progressTitle}>{titleMessage}</Text>
+								<Text style={styles.progressBody}>{trendMessage}</Text>
 							</View>
 						</View>
 						<View style={styles.chipRow}>

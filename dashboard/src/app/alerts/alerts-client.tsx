@@ -81,11 +81,16 @@ export function AlertsClient({ alerts, stats }: AlertsClientProps) {
 	const [, startTransition] = useTransition();
 
 	useEffect(() => {
+		const patientIds = [...new Set(alerts.map((a) => a.patientId))];
+		if (patientIds.length === 0) return;
+
+		const filter = `user_id=in.(${patientIds.join(",")})`;
+
 		const channel = supabase
 			.channel("alerts_flags_changes")
 			.on(
 				"postgres_changes",
-				{ event: "*", schema: "public", table: "flags" },
+				{ event: "*", schema: "public", table: "flags", filter },
 				() => {
 					startTransition(() => router.refresh());
 				},
@@ -95,7 +100,7 @@ export function AlertsClient({ alerts, stats }: AlertsClientProps) {
 		return () => {
 			supabase.removeChannel(channel);
 		};
-	}, [supabase, router]);
+	}, [supabase, router, alerts]);
 
 	const filteredAlerts =
 		filter === "all"

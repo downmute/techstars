@@ -1,3 +1,4 @@
+import { getLocalDateKey } from "@/lib/date-utils";
 import { supabase } from "@/lib/supabase";
 import type { DetectedFlag } from "@/services/flag-service";
 import type { RecoveryScoreResult } from "@/services/recovery-score-service";
@@ -11,7 +12,7 @@ export async function saveRecoveryScore(
 	userId: string,
 	result: RecoveryScoreResult,
 ): Promise<boolean> {
-	const today = new Date().toISOString().slice(0, 10);
+	const today = getLocalDateKey();
 
 	const { error } = await supabase.from("recovery_scores").upsert(
 		{
@@ -21,6 +22,7 @@ export async function saveRecoveryScore(
 			physical_score: result.physical,
 			mental_score: result.mental,
 			sleep_score: result.sleep,
+			support_score: result.support,
 		},
 		{ onConflict: "user_id,date" },
 	);

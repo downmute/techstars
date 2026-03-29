@@ -63,18 +63,22 @@ export async function saveUserProfile(
 ): Promise<boolean> {
 	const clinicId = await resolveClinicId(profile.clinicCode);
 
-	const { error } = await supabase.from("users").upsert(
-		{
-			id: userId,
-			clinic_id: clinicId,
-			weeks_postpartum: profile.weeksPostpartum,
-			delivery_type: profile.deliveryType,
-			feeding_method: mapFeedingMethod(profile.feedingMethod),
-			return_to_work_date: profile.returnToWorkDate,
-			work_setup: profile.workSetup,
-		},
-		{ onConflict: "id" },
-	);
+	const payload: Record<string, unknown> = {
+		id: userId,
+		weeks_postpartum: profile.weeksPostpartum,
+		delivery_type: profile.deliveryType,
+		feeding_method: mapFeedingMethod(profile.feedingMethod),
+		return_to_work_date: profile.returnToWorkDate,
+		work_setup: profile.workSetup,
+	};
+
+	if (clinicId) {
+		payload.clinic_id = clinicId;
+	}
+
+	const { error } = await supabase
+		.from("users")
+		.upsert(payload, { onConflict: "id" });
 
 	if (error) {
 		console.warn("[Supabase] saveUserProfile failed:", error.message);

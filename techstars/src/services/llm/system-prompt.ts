@@ -1,49 +1,49 @@
-import type { MemoryEntry } from '@/services/memory/memory-types';
+import type { MemoryEntry } from "@/services/memory/memory-types";
 
 function getDayName(date: Date): string {
-  return date.toLocaleDateString('en-US', { weekday: 'long' });
+	return date.toLocaleDateString("en-US", { weekday: "long" });
 }
 
 function getDateString(date: Date): string {
-  return date.toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
+	return date.toLocaleDateString("en-US", {
+		month: "long",
+		day: "numeric",
+		year: "numeric",
+	});
 }
 
 function getTimeString(date: Date): string {
-  return date.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
+	return date.toLocaleTimeString("en-US", {
+		hour: "numeric",
+		minute: "2-digit",
+		hour12: true,
+	});
 }
 
 function formatMemoryEntry(entry: MemoryEntry): string {
-  return `- ${entry.content}`;
+	return `- ${entry.content}`;
 }
 
 export function buildSystemPrompt(
-  userName: string,
-  memories: MemoryEntry[],
-  recentSurveyContext?: string | null
+	userName: string,
+	memories: MemoryEntry[],
+	recentSurveyContext?: string | null,
 ): string {
-  const now = new Date();
-  const dayName = getDayName(now);
-  const dateStr = getDateString(now);
-  const timeStr = getTimeString(now);
+	const now = new Date();
+	const dayName = getDayName(now);
+	const dateStr = getDateString(now);
+	const timeStr = getTimeString(now);
 
-  const memoryBlock =
-    memories.length > 0
-      ? `What you know about ${userName}:\n${memories.map(formatMemoryEntry).join('\n')}`
-      : `You are just getting to know ${userName}.`;
+	const memoryBlock =
+		memories.length > 0
+			? `What you know about ${userName}:\n${memories.map(formatMemoryEntry).join("\n")}`
+			: `You are just getting to know ${userName}.`;
 
-  const surveyBlock = recentSurveyContext
-    ? `Recent survey scores:\n${recentSurveyContext}`
-    : `Recent survey scores: none recorded yet.`;
+	const surveyBlock = recentSurveyContext
+		? `Recent survey scores:\n${recentSurveyContext}`
+		: `Recent survey scores: none recorded yet.`;
 
-  return `You are Vela, a warm and caring AI companion for ${userName}.
+	return `You are Vela, a warm and caring AI companion for ${userName}.
 
 Today is ${dayName}, ${dateStr}. The time is ${timeStr}.
 

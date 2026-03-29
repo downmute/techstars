@@ -1,27 +1,23 @@
 import { router } from "expo-router";
 import { useRef, useState } from "react";
 import {
+	type NativeSyntheticEvent,
 	Pressable,
 	StyleSheet,
 	Text,
 	TextInput,
-	View,
-	type NativeSyntheticEvent,
 	type TextInputKeyPressEventData,
+	View,
 } from "react-native";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-import { ReEntryColors } from "@/constants/vela-colors";
 import { Fonts } from "@/constants/theme";
+import { ReEntryColors } from "@/constants/vela-colors";
 import { useAppStore } from "@/state/app-state";
 
 const CODE_LENGTH = 5;
 
-function ProgressDots({
-	current,
-	total,
-}: { current: number; total: number }) {
+function ProgressDots({ current, total }: { current: number; total: number }) {
 	return (
 		<View style={progressStyles.row}>
 			{Array.from({ length: total }).map((_, i) => (
@@ -69,9 +65,7 @@ const backStyles = StyleSheet.create({
 });
 
 export default function ClinicCodeScreen() {
-	const [digits, setDigits] = useState<string[]>(
-		Array(CODE_LENGTH).fill(""),
-	);
+	const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(""));
 	const [activeIndex, setActiveIndex] = useState(0);
 	const inputRefs = useRef<(TextInput | null)[]>([]);
 	const setClinicCode = useAppStore((s) => s.setClinicCode);

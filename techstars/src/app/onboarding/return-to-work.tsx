@@ -10,11 +10,10 @@ import {
 } from "react-native";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-import { ReEntryColors } from "@/constants/vela-colors";
 import { Fonts } from "@/constants/theme";
-import { useAppStore } from "@/state/app-state";
+import { ReEntryColors } from "@/constants/vela-colors";
 import type { WorkSetup } from "@/state/app-state";
+import { useAppStore } from "@/state/app-state";
 
 const WORK_OPTIONS: { label: string; icon: string; value: WorkSetup }[] = [
 	{ label: "Full-time office", icon: "💻", value: "full-time-office" },
@@ -23,10 +22,7 @@ const WORK_OPTIONS: { label: string; icon: string; value: WorkSetup }[] = [
 	{ label: "Not returning yet", icon: "🌿", value: "not-returning" },
 ];
 
-function ProgressDots({
-	current,
-	total,
-}: { current: number; total: number }) {
+function ProgressDots({ current, total }: { current: number; total: number }) {
 	return (
 		<View style={progressStyles.row}>
 			{Array.from({ length: total }).map((_, i) => (

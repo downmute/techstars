@@ -17,7 +17,7 @@ import {
 	saveFlag,
 	saveRecoveryScore,
 } from "@/services/supabase/recovery-score-supabase";
-import { useAppStore } from "@/state/app-state";
+import { getCurrentWeeksPostpartum, useAppStore } from "@/state/app-state";
 import {
 	getSurveyDateKey,
 	type SurveyScores,
@@ -258,7 +258,7 @@ export function DailySurvey() {
 	const upsertSummary = useSurveyStore((s) => s.upsertSummary);
 	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
 	const supabaseUserId = useAppStore((s) => s.supabaseUserId);
-	const weeksPostpartum = useAppStore((s) => s.weeksPostpartum);
+	const weeksPostpartum = useAppStore((s) => getCurrentWeeksPostpartum(s));
 	const userName = useAppStore((s) => s.userName);
 	const calendarEvents = useAppStore((s) => s.calendarEvents);
 	const setCalendarRecommendation = useAppStore(
@@ -295,6 +295,7 @@ export function DailySurvey() {
 	}, [todayKey]);
 
 	async function handleSave() {
+		if (mood === null) return;
 		setSaveState("saving");
 
 		const scores = computeSurveyScores({
@@ -315,6 +316,9 @@ export function DailySurvey() {
 		const latestRecovery = computeRecoveryScore(scores, weeksPostpartum);
 		const detectedFlags = detectFlags(updatedHistory, hopelessness);
 
+		const swallow = (e: unknown) =>
+			console.warn("[Supabase] fire-and-forget failed:", e);
+
 		if (supabaseUserId) {
 			const row: CheckInRow = {
 				mood,
@@ -328,14 +332,14 @@ export function DailySurvey() {
 				baby_care_confidence: babyCareConfidence,
 				hardest_tag: hardestTag,
 			};
-			await saveCheckIn(supabaseUserId, row);
+			saveCheckIn(supabaseUserId, row).catch(swallow);
 
 			if (latestRecovery) {
-				saveRecoveryScore(supabaseUserId, latestRecovery);
+				saveRecoveryScore(supabaseUserId, latestRecovery).catch(swallow);
 			}
 
 			for (const flag of detectedFlags) {
-				saveFlag(supabaseUserId, flag);
+				saveFlag(supabaseUserId, flag).catch(swallow);
 			}
 		}
 
@@ -349,7 +353,7 @@ export function DailySurvey() {
 			userName,
 			supabaseUserId,
 			upsertSummary,
-		});
+		}).catch(swallow);
 
 		generateAndStoreClinicalSummary({
 			scores,
@@ -360,7 +364,7 @@ export function DailySurvey() {
 			weeksPostpartum,
 			rawHopelessness: hopelessness,
 			supabaseUserId,
-		});
+		}).catch(swallow);
 
 		if (calendarEvents.length > 0) {
 			generateAndStoreRecommendation({
@@ -570,13 +574,18 @@ export function DailySurvey() {
 			<Pressable
 				style={[
 					styles.saveButton,
-					saveState === "saving" && styles.saveButtonDisabled,
+					(saveState === "saving" || mood === null) &&
+						styles.saveButtonDisabled,
 				]}
 				onPress={handleSave}
-				disabled={saveState === "saving"}
+				disabled={saveState === "saving" || mood === null}
 			>
 				<Text style={styles.saveButtonText}>
-					{saveState === "saving" ? "Saving..." : "Save check-in"}
+					{saveState === "saving"
+						? "Saving..."
+						: mood === null
+							? "Select your mood to continue"
+							: "Save check-in"}
 				</Text>
 			</Pressable>
 		</ScrollView>

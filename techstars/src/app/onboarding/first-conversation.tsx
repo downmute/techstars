@@ -27,7 +27,7 @@ import {
 } from "@/services/voice/silero-vad-runtime";
 import { initSTT, resetSTT } from "@/services/voice/stt-engine";
 import { initTTS, speak } from "@/services/voice/tts-engine";
-import { useAppStore } from "@/state/app-state";
+import { getCurrentWeeksPostpartum, useAppStore } from "@/state/app-state";
 import { useOrbStore } from "@/state/orb-state";
 
 type Phase = "checking" | "downloading" | "preparing" | "greeting";
@@ -99,7 +99,7 @@ export default function FirstConversationScreen() {
 	const setSupabaseUserId = useAppStore((s) => s.setSupabaseUserId);
 	const setOrbState = useOrbStore((s) => s.setState);
 
-	const weeksPostpartum = useAppStore((s) => s.weeksPostpartum);
+	const weeksPostpartum = useAppStore((s) => getCurrentWeeksPostpartum(s));
 	const deliveryType = useAppStore((s) => s.deliveryType);
 	const feedingMethod = useAppStore((s) => s.feedingMethod);
 	const clinicCode = useAppStore((s) => s.clinicCode);

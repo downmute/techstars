@@ -1,5 +1,5 @@
-import { router } from "expo-router";
 import { makeRedirectUri, useAuthRequest } from "expo-auth-session";
+import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useEffect } from "react";
 import {
@@ -11,9 +11,8 @@ import {
 } from "react-native";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-import { ReEntryColors } from "@/constants/vela-colors";
 import { Fonts } from "@/constants/theme";
+import { ReEntryColors } from "@/constants/vela-colors";
 import { useAppStore } from "@/state/app-state";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -40,10 +39,7 @@ const BENEFITS = [
 	},
 ];
 
-function ProgressDots({
-	current,
-	total,
-}: { current: number; total: number }) {
+function ProgressDots({ current, total }: { current: number; total: number }) {
 	return (
 		<View style={progressStyles.row}>
 			{Array.from({ length: total }).map((_, i) => (
@@ -141,7 +137,8 @@ export default function CalendarScreen() {
 				<Animated.View entering={FadeInDown.delay(200).duration(400)}>
 					<Text style={styles.title}>Your calendar</Text>
 					<Text style={styles.subtitle}>
-						We&apos;ll suggest breaks and pace your recovery around your schedule.
+						We&apos;ll suggest breaks and pace your recovery around your
+						schedule.
 					</Text>
 				</Animated.View>
 
@@ -160,9 +157,7 @@ export default function CalendarScreen() {
 							<Text style={styles.checkmark}>✓</Text>
 							<View style={styles.benefitContent}>
 								<Text style={styles.benefitTitle}>{benefit.title}</Text>
-								<Text style={styles.benefitDesc}>
-									{benefit.description}
-								</Text>
+								<Text style={styles.benefitDesc}>{benefit.description}</Text>
 							</View>
 						</View>
 					))}
