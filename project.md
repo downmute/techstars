@@ -130,15 +130,15 @@ Current color scheme is dark purple/indigo — **this needs to be replaced** wit
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| UI | Mobile app redesign (ReEntry rebrand + warm palette) | ⬜ Not started | |
-| UI | Clinic dashboard UI design | ⬜ Not started | |
-| Infra | Supabase project + schema | ⬜ Not started | |
-| Infra | Railway setup (Next.js dashboard) | ⬜ Not started | |
-| F1 | Onboarding (clinical) | ⬜ Not started | |
+| UI | Mobile app redesign (ReEntry rebrand + warm palette) | ✅ Done | Warm rose/cream palette, premium wellness journal feel |
+| UI | Clinic dashboard UI design | ✅ Done | 5 artboards in Paper MCP, light mode |
+| Infra | Supabase project + schema | ✅ Done | 6 tables, RLS policies, auth trigger |
+| Infra | Railway setup (Next.js dashboard) | 🟡 In progress | Next.js app built with mock data, deployment pending |
+| F1 | Onboarding (clinical) | ✅ Done | STORK intake, clinic code, anonymous Supabase auth |
 | F2 | Daily check-in survey | ✅ Done | STORK-grounded 10-item check-in, wired to Supabase, completion state added |
 | F3 | Recovery Score | ✅ Done | STORK-grounded 5-category dynamic weighting + PPD flag detection + Supabase persistence |
-| F4 | User daily summary | ⬜ Not started | |
-| F5 | GCal stress forecasting | 🟡 In progress | OAuth + mock built, real API + notification missing |
+| F4 | User daily summary | ✅ Done | Groq LLM warm recap, fire-and-forget, Supabase + Zustand persistence |
+| F5 | GCal stress forecasting | ✅ Done | Real Google Calendar API, LLM break recommendations, recovery-calibrated, break notification |
 | F6 | Clinic dashboard patient panel | ⬜ Not started | |
 | F7 | Doctor daily summary | ⬜ Not started | |
 | F8 | Smart doctor alerts | ⬜ Not started | |

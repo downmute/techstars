@@ -36,6 +36,21 @@ create policy "Clinics can read clinical summaries for their patients"
     )
   );
 
+-- Users can insert their own daily summaries (client-side after check-in)
+create policy "Users can insert own daily summaries"
+  on public.daily_summaries
+  for insert
+  to authenticated
+  with check (auth.uid() = user_id);
+
+-- Users can update their own daily summaries (upsert on redo)
+create policy "Users can update own daily summaries"
+  on public.daily_summaries
+  for update
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
 -- Service role full access (LLM generation happens server-side)
 create policy "Service role full access on daily_summaries"
   on public.daily_summaries

@@ -1,4 +1,5 @@
 import { router } from "expo-router";
+import { useCallback, useEffect, useRef } from "react";
 
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
@@ -6,6 +7,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, { Circle } from "react-native-svg";
 import { Fonts } from "@/constants/theme";
 import { APP_BACKGROUND, ReEntryColors } from "@/constants/vela-colors";
+import type { CalendarEvent } from "@/services/calendar/calendar-mock";
+import { generateAndStoreRecommendation } from "@/services/calendar/calendar-recommendation";
+import { getCalendarEvents } from "@/services/calendar/calendar-service";
 import {
 	computeRecoveryScore,
 	type RecoveryScoreResult,
@@ -129,9 +133,27 @@ const subStyles = StyleSheet.create({
 	},
 });
 
+function formatEventTime(iso: string): string {
+	return new Date(iso).toLocaleTimeString("en-US", {
+		hour: "numeric",
+		minute: "2-digit",
+	});
+}
+
 export default function HomeScreen() {
 	const userName = useAppStore((s) => s.userName);
 	const weeksPostpartum = useAppStore((s) => s.weeksPostpartum);
+	const googleAccessToken = useAppStore((s) => s.googleAccessToken);
+	const calendarEvents = useAppStore((s) => s.calendarEvents);
+	const calendarRecommendation = useAppStore((s) => s.calendarRecommendation);
+	const calendarLastFetched = useAppStore((s) => s.calendarLastFetched);
+	const setCalendarEvents = useAppStore((s) => s.setCalendarEvents);
+	const setCalendarRecommendation = useAppStore(
+		(s) => s.setCalendarRecommendation,
+	);
+	const setCalendarLastFetched = useAppStore((s) => s.setCalendarLastFetched);
+	const setGoogleAccessToken = useAppStore((s) => s.setGoogleAccessToken);
+
 	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
 	const summaryHistory = useSurveyStore((s) => s.summaryHistory);
 	const dates = getSortedSurveyDates(surveyHistory);
@@ -158,6 +180,47 @@ export default function HomeScreen() {
 
 	const streakCount = dates.length;
 	const firstName = userName?.trim()?.split(" ")[0] || "there";
+	const hasFetchedRef = useRef(false);
+
+	const todayDate = new Date().toISOString().slice(0, 10);
+	const isCalendarStale = !calendarLastFetched?.startsWith(todayDate);
+	const visibleEvents = isCalendarStale ? [] : calendarEvents;
+	const visibleRecommendation = isCalendarStale
+		? null
+		: calendarRecommendation;
+
+	const fetchCalendar = useCallback(async () => {
+		const state = useAppStore.getState();
+		const today = new Date().toISOString().slice(0, 10);
+		if (
+			state.calendarLastFetched?.startsWith(today) &&
+			state.calendarEvents.length > 0
+		) {
+			return;
+		}
+
+		const result = await getCalendarEvents(state.googleAccessToken, 24, () =>
+			useAppStore.getState().setGoogleAccessToken(null),
+		);
+		useAppStore.getState().setCalendarEvents(result.events);
+		useAppStore.getState().setCalendarLastFetched(new Date().toISOString());
+
+		if (result.events.length > 0 && !useAppStore.getState().calendarRecommendation) {
+			generateAndStoreRecommendation({
+				events: result.events,
+				recoveryScore: currentScore,
+				userName,
+				setCalendarRecommendation: useAppStore.getState().setCalendarRecommendation,
+			});
+		}
+	}, [currentScore, userName]);
+
+	useEffect(() => {
+		if (!hasFetchedRef.current) {
+			hasFetchedRef.current = true;
+			fetchCalendar();
+		}
+	}, [fetchCalendar]);
 
 	return (
 		<View style={styles.container}>
@@ -307,37 +370,88 @@ export default function HomeScreen() {
 					<Animated.View entering={FadeInDown.delay(280).duration(420)}>
 						<View style={styles.calendarHeader}>
 							<Text style={styles.calendarLabel}>TODAY</Text>
-							<Pressable>
-								<Text style={styles.calendarLink}>See all</Text>
+							{googleAccessToken && visibleEvents.length > 0 && (
+								<Pressable onPress={fetchCalendar}>
+									<Text style={styles.calendarLink}>Refresh</Text>
+								</Pressable>
+							)}
+						</View>
+						{googleAccessToken ? (
+							<View style={styles.calendarCard}>
+								{visibleEvents.length > 0 ? (
+									visibleEvents.map((event: CalendarEvent, idx: number) => (
+										<View key={event.id}>
+											{idx > 0 && <View style={styles.calendarDivider} />}
+											<View style={styles.calendarItem}>
+												<View
+													style={[
+														styles.calendarBorder,
+														{
+															backgroundColor: ReEntryColors.primary,
+														},
+													]}
+												/>
+												<View style={styles.calendarItemContent}>
+													<Text
+														style={styles.calendarItemTitle}
+														numberOfLines={1}
+													>
+														{event.title}
+													</Text>
+													<Text style={styles.calendarItemTime}>
+														{formatEventTime(event.start)}
+													</Text>
+												</View>
+											</View>
+										</View>
+									))
+								) : (
+									<View style={styles.calendarItem}>
+										<Text style={styles.calendarEmptyText}>
+											No events today — enjoy the open space.
+										</Text>
+									</View>
+								)}
+								{visibleRecommendation && (
+									<>
+										<View style={styles.calendarDivider} />
+										<View style={styles.calendarItem}>
+											<View
+												style={[
+													styles.calendarBorder,
+													{
+														backgroundColor: ReEntryColors.success,
+													},
+												]}
+											/>
+											<View style={styles.calendarItemContent}>
+												<Text
+													style={styles.calendarRecommendationText}
+													numberOfLines={3}
+												>
+													{visibleRecommendation}
+												</Text>
+											</View>
+										</View>
+									</>
+								)}
+							</View>
+						) : (
+							<Pressable
+								style={styles.calendarConnectCard}
+								onPress={() => router.navigate("/onboarding/calendar")}
+							>
+								<Text style={styles.calendarConnectIcon}>📅</Text>
+								<View style={styles.calendarConnectContent}>
+									<Text style={styles.calendarConnectTitle}>
+										Connect your calendar
+									</Text>
+									<Text style={styles.calendarConnectSubtitle}>
+										Get personalized break suggestions
+									</Text>
+								</View>
 							</Pressable>
-						</View>
-						<View style={styles.calendarCard}>
-							<View style={styles.calendarItem}>
-								<View
-									style={[
-										styles.calendarBorder,
-										{ backgroundColor: ReEntryColors.primary },
-									]}
-								/>
-								<View style={styles.calendarItemContent}>
-									<Text style={styles.calendarItemTitle}>Team standup</Text>
-									<Text style={styles.calendarItemTime}>10:00 AM</Text>
-								</View>
-							</View>
-							<View style={styles.calendarDivider} />
-							<View style={styles.calendarItem}>
-								<View
-									style={[
-										styles.calendarBorder,
-										{ backgroundColor: ReEntryColors.success },
-									]}
-								/>
-								<View style={styles.calendarItemContent}>
-									<Text style={styles.calendarItemTitle}>Suggested break</Text>
-									<Text style={styles.calendarItemTime}>12:30 PM</Text>
-								</View>
-							</View>
-						</View>
+						)}
 					</Animated.View>
 				</ScrollView>
 			</SafeAreaView>
@@ -566,5 +680,46 @@ const styles = StyleSheet.create({
 		height: 1,
 		backgroundColor: ReEntryColors.border,
 		marginLeft: 35,
+	},
+	calendarEmptyText: {
+		color: ReEntryColors.textSecondary,
+		fontSize: 14,
+		fontFamily: Fonts.sans,
+	},
+	calendarRecommendationText: {
+		color: ReEntryColors.success,
+		fontSize: 13,
+		lineHeight: 18,
+		fontFamily: Fonts.sans,
+		flex: 1,
+	},
+	calendarConnectCard: {
+		backgroundColor: ReEntryColors.surface,
+		borderRadius: 20,
+		borderWidth: 1,
+		borderColor: ReEntryColors.border,
+		borderStyle: "dashed",
+		padding: 20,
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 14,
+	},
+	calendarConnectIcon: {
+		fontSize: 28,
+	},
+	calendarConnectContent: {
+		flex: 1,
+		gap: 2,
+	},
+	calendarConnectTitle: {
+		color: ReEntryColors.textPrimary,
+		fontSize: 15,
+		fontWeight: "600",
+		fontFamily: Fonts.sans,
+	},
+	calendarConnectSubtitle: {
+		color: ReEntryColors.textSecondary,
+		fontSize: 13,
+		fontFamily: Fonts.sans,
 	},
 });

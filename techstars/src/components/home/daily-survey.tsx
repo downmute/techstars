@@ -4,6 +4,7 @@ import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 
 import { Fonts } from "@/constants/theme";
 import { ReEntryColors } from "@/constants/vela-colors";
+import { generateAndStoreRecommendation } from "@/services/calendar/calendar-recommendation";
 import { generateAndStoreSummary } from "@/services/daily-summary-generator";
 import { detectFlags } from "@/services/flag-service";
 import { computeRecoveryScore } from "@/services/recovery-score-service";
@@ -258,6 +259,10 @@ export function DailySurvey() {
 	const supabaseUserId = useAppStore((s) => s.supabaseUserId);
 	const weeksPostpartum = useAppStore((s) => s.weeksPostpartum);
 	const userName = useAppStore((s) => s.userName);
+	const calendarEvents = useAppStore((s) => s.calendarEvents);
+	const setCalendarRecommendation = useAppStore(
+		(s) => s.setCalendarRecommendation,
+	);
 
 	const todayKey = getSurveyDateKey();
 	const existingScores = surveyHistory[todayKey];
@@ -335,15 +340,26 @@ export function DailySurvey() {
 		setSaveState("saved");
 
 		const updatedHistoryForSummary = { ...surveyHistory, [todayKey]: scores };
+		const latestRecovery = computeRecoveryScore(scores, weeksPostpartum);
+
 		generateAndStoreSummary({
 			scores,
-			recoveryResult: computeRecoveryScore(scores, weeksPostpartum),
+			recoveryResult: latestRecovery,
 			hardestTag,
 			surveyHistory: updatedHistoryForSummary,
 			userName,
 			supabaseUserId,
 			upsertSummary,
 		});
+
+		if (calendarEvents.length > 0) {
+			generateAndStoreRecommendation({
+				events: calendarEvents,
+				recoveryScore: latestRecovery?.overall ?? null,
+				userName,
+				setCalendarRecommendation,
+			});
+		}
 	}
 
 	if (alreadyCompleted) {

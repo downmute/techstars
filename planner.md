@@ -180,16 +180,35 @@ Steps are ordered to front-load design decisions, then infrastructure, then feat
 
 ---
 
-## Step 9 — F5: GCal Stress Forecasting
+## Step 9 — F5: GCal Stress Forecasting ✅ DONE
 
 **Goal**: Use real Google Calendar data to send personalized break recommendations.
 
 **Scope**:
-- [ ] Swap `getMockEvents` for real Google Calendar API call using stored `googleAccessToken`
-- [ ] Morning notification logic: fetch today's calendar → pass to LLM with recovery score → generate recommendation
-- [ ] Notification format: "Your day looks busy. Between [2pm–3pm] you have a gap — I'd suggest a 10-min walk to decompress before [3pm meeting]"
-- [ ] Recommendation calibrated to recovery score (lower score = more conservative)
-- [ ] Fallback gracefully if no Google token is present
+- [x] Swap `getMockEvents` for real Google Calendar API call using stored `googleAccessToken`
+  - Created `src/services/calendar/calendar-service.ts` — `getCalendarEvents(token, withinHours, onTokenExpired)` fetches from Google Calendar v3 API, maps to existing `CalendarEvent` interface, returns `{ events, isLive }` tuple
+  - Falls back to mock data if no token, 401 (expired), or any API error — never throws
+  - On 401: calls `onTokenExpired` callback to clear Zustand token, shows "Reconnect" prompt on home screen
+- [x] Morning notification logic: fetch today's calendar → pass to LLM with recovery score → generate recommendation
+  - Created `src/services/calendar/calendar-recommendation.ts` — `generateCalendarRecommendation()` calls `chatOnce` with recovery-calibrated system prompt
+  - `findGaps(events, minMinutes)` pure function scans sorted events for free windows, feeds concrete time slots into LLM prompt
+  - `generateAndStoreRecommendation()` fire-and-forget orchestrator (mirrors `generateAndStoreSummary` pattern): generates text → writes to Zustand → optionally schedules break notification
+  - Triggered on home screen mount (after calendar fetch) and after each check-in save in `daily-survey.tsx`
+- [x] Notification format: personalized break suggestions referencing specific calendar times and gaps
+  - Added `scheduleCalendarBreakNotification(title, body, fireDate)` to `notification-service.ts` — one-time local push 5 minutes before the best gap
+- [x] Recommendation calibrated to recovery score (lower score = more conservative)
+  - System prompt instructs: <50 = longer breaks / skip optional meetings / emphasize rest; 50–75 = walk or stretch; >75 = light encouragement
+  - Score passed as context but never exposed as a number to the user
+- [x] Fallback gracefully if no Google token is present
+  - Home screen shows dashed "Connect your calendar" CTA card when no token → navigates to `/onboarding/calendar`
+  - LLM tool handler (`tool-handlers.ts`) also swapped from `getMockEvents` to `getCalendarEvents` — voice agent now uses real calendar data when available
+- [x] Added 3 new fields to `app-state.ts`: `calendarEvents`, `calendarRecommendation`, `calendarLastFetched` (with same-day caching to avoid redundant fetches)
+- [x] Home screen calendar section: dynamic event list with real data, green-accented recommendation row, refresh button, empty state
+
+**Files created**: `calendar-service.ts`, `calendar-recommendation.ts`
+**Files modified**: `app-state.ts`, `(conversation)/index.tsx`, `tool-handlers.ts`, `notification-service.ts`, `daily-survey.tsx`
+
+**Build status**: TypeScript ✅ 0 new errors (1 pre-existing in `survey-state.ts`), Biome ✅ 0 errors
 
 ---
 

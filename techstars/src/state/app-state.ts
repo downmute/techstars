@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import type { CalendarEvent } from "@/services/calendar/calendar-mock";
 
 export interface OnboardingMemories {
 	hometown: string;
@@ -35,6 +36,10 @@ interface AppStore {
 	returnToWorkDate: string | null;
 	workSetup: WorkSetup | null;
 
+	calendarEvents: CalendarEvent[];
+	calendarRecommendation: string | null;
+	calendarLastFetched: string | null;
+
 	setOnboardingComplete: (v: boolean) => void;
 	setSupabaseUserId: (id: string | null) => void;
 	setUserName: (name: string) => void;
@@ -51,6 +56,10 @@ interface AppStore {
 	setClinicCode: (v: string | null) => void;
 	setReturnToWorkDate: (v: string | null) => void;
 	setWorkSetup: (v: WorkSetup | null) => void;
+
+	setCalendarEvents: (events: CalendarEvent[]) => void;
+	setCalendarRecommendation: (text: string | null) => void;
+	setCalendarLastFetched: (iso: string | null) => void;
 
 	resetOnboarding: () => void;
 }
@@ -80,6 +89,10 @@ export const useAppStore = create<AppStore>()(
 			returnToWorkDate: null,
 			workSetup: null,
 
+			calendarEvents: [],
+			calendarRecommendation: null,
+			calendarLastFetched: null,
+
 			setOnboardingComplete: (onboardingComplete) =>
 				set({ onboardingComplete }),
 			setSupabaseUserId: (supabaseUserId) => set({ supabaseUserId }),
@@ -106,6 +119,12 @@ export const useAppStore = create<AppStore>()(
 			setReturnToWorkDate: (returnToWorkDate) => set({ returnToWorkDate }),
 			setWorkSetup: (workSetup) => set({ workSetup }),
 
+			setCalendarEvents: (calendarEvents) => set({ calendarEvents }),
+			setCalendarRecommendation: (calendarRecommendation) =>
+				set({ calendarRecommendation }),
+			setCalendarLastFetched: (calendarLastFetched) =>
+				set({ calendarLastFetched }),
+
 			resetOnboarding: () =>
 				set({
 					onboardingComplete: false,
@@ -127,6 +146,9 @@ export const useAppStore = create<AppStore>()(
 					clinicCode: null,
 					returnToWorkDate: null,
 					workSetup: null,
+					calendarEvents: [],
+					calendarRecommendation: null,
+					calendarLastFetched: null,
 				}),
 		}),
 		{
