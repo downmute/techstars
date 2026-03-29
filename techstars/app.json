@@ -11,7 +11,14 @@
 			"icon": "./assets/expo.icon",
 			"bundleIdentifier": "com.downmute.vela",
 			"infoPlist": {
-				"ITSAppUsesNonExemptEncryption": false
+				"ITSAppUsesNonExemptEncryption": false,
+				"CFBundleURLTypes": [
+					{
+						"CFBundleURLSchemes": [
+							"com.googleusercontent.apps.19616633487-l1pumh661f3lo7cqtrhutpieoul40pi7"
+						]
+					}
+				]
 			}
 		},
 		"android": {

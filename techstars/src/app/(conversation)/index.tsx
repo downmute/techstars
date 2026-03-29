@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
@@ -16,6 +16,7 @@ import {
 } from "@/services/recovery-score-service";
 import { getCurrentWeeksPostpartum, useAppStore } from "@/state/app-state";
 import {
+	buildAggregatedSurveyHistory,
 	getSortedSurveyDates,
 	getSurveyDateKey,
 	useSurveyStore,
@@ -140,6 +141,36 @@ function formatEventTime(iso: string): string {
 	});
 }
 
+function formatEventDuration(startIso: string, endIso: string): string {
+	const minutes = Math.max(
+		0,
+		Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000),
+	);
+	if (minutes < 60) {
+		return `${minutes} min`;
+	}
+
+	const hours = Math.floor(minutes / 60);
+	const remainderMinutes = minutes % 60;
+	if (remainderMinutes === 0) {
+		return `${hours} hr`;
+	}
+	return `${hours} hr ${remainderMinutes} min`;
+}
+
+function formatEventWindow(startIso: string, endIso: string): string {
+	return `${formatEventTime(startIso)}-${formatEventTime(endIso)} • ${formatEventDuration(
+		startIso,
+		endIso,
+	)}`;
+}
+
+function getLocalDateKey(date = new Date()): string {
+	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+		date.getDate(),
+	).padStart(2, "0")}`;
+}
+
 function computeStreak(surveyHistory: Record<string, unknown>): number {
 	const today = new Date();
 	let streak = 0;
@@ -163,22 +194,37 @@ export default function HomeScreen() {
 	const calendarEvents = useAppStore((s) => s.calendarEvents);
 	const calendarRecommendation = useAppStore((s) => s.calendarRecommendation);
 	const calendarLastFetched = useAppStore((s) => s.calendarLastFetched);
+	const setCalendarEvents = useAppStore((s) => s.setCalendarEvents);
+	const setCalendarRecommendation = useAppStore(
+		(s) => s.setCalendarRecommendation,
+	);
+	const setCalendarLastFetched = useAppStore((s) => s.setCalendarLastFetched);
+	const [isRecommendationExpanded, setIsRecommendationExpanded] = useState(false);
 
 	const surveyHistory = useSurveyStore((s) => s.surveyHistory);
+	const aiSurveyHistory = useSurveyStore((s) => s.aiSurveyHistory);
 	const summaryHistory = useSurveyStore((s) => s.summaryHistory);
-	const dates = getSortedSurveyDates(surveyHistory);
+	const aggregatedSurveyHistory = useMemo(
+		() => buildAggregatedSurveyHistory(surveyHistory, aiSurveyHistory),
+		[aiSurveyHistory, surveyHistory],
+	);
+	const dates = getSortedSurveyDates(aggregatedSurveyHistory);
 	const todayKey = getSurveyDateKey();
 	const todaySummary = summaryHistory[todayKey] ?? null;
 	const hasCheckedInToday = Boolean(surveyHistory[todayKey]);
 	const latestDate = dates[dates.length - 1];
-	const latestScores = latestDate ? surveyHistory[latestDate] : undefined;
+	const latestScores = latestDate
+		? aggregatedSurveyHistory[latestDate]
+		: undefined;
 	const currentResult: RecoveryScoreResult | null = latestScores
 		? computeRecoveryScore(latestScores, weeksPostpartum)
 		: null;
 	const currentScore = currentResult?.overall ?? null;
 
 	const previousDate = dates.length >= 2 ? dates[dates.length - 2] : undefined;
-	const previousScores = previousDate ? surveyHistory[previousDate] : undefined;
+	const previousScores = previousDate
+		? aggregatedSurveyHistory[previousDate]
+		: undefined;
 	const previousResult = previousScores
 		? computeRecoveryScore(previousScores, weeksPostpartum)
 		: null;
@@ -194,8 +240,8 @@ export default function HomeScreen() {
 	if (currentScore !== null && dates.length >= 2) {
 		const recentDates = dates.slice(-7, -1);
 		const recentScores = recentDates
-			.map((d) => {
-				const s = surveyHistory[d];
+				.map((d) => {
+				const s = aggregatedSurveyHistory[d];
 				if (!s) return null;
 				const vals = Object.values(s).filter(
 					(v): v is number => typeof v === "number",
@@ -229,9 +275,9 @@ export default function HomeScreen() {
 
 	const streakCount = computeStreak(surveyHistory);
 	const firstName = userName?.trim()?.split(" ")[0] || "there";
-	const hasFetchedRef = useRef(false);
+	const lastCalendarFetchKeyRef = useRef<string | null>(null);
 
-	const todayDate = new Date().toISOString().slice(0, 10);
+	const todayDate = getLocalDateKey();
 	const isCalendarStale = !calendarLastFetched?.startsWith(todayDate);
 	const visibleEvents = isCalendarStale ? [] : calendarEvents;
 	const visibleRecommendation = isCalendarStale ? null : calendarRecommendation;
@@ -239,7 +285,7 @@ export default function HomeScreen() {
 	const fetchCalendar = useCallback(
 		async (force = false) => {
 			const state = useAppStore.getState();
-			const today = new Date().toISOString().slice(0, 10);
+			const today = getLocalDateKey();
 			if (
 				!force &&
 				state.calendarLastFetched?.startsWith(today) &&
@@ -248,8 +294,11 @@ export default function HomeScreen() {
 				return;
 			}
 
-			const result = await getCalendarEvents(state.googleAccessToken, 24, () =>
-				useAppStore.getState().setGoogleAccessToken(null),
+			const result = await getCalendarEvents(
+				state.googleAccessToken,
+				24,
+				() => useAppStore.getState().setGoogleAccessToken(null),
+				{ rangeMode: "endOfDay" },
 			);
 			useAppStore.getState().setCalendarEvents(result.events);
 			useAppStore.getState().setCalendarLastFetched(new Date().toISOString());
@@ -271,11 +320,32 @@ export default function HomeScreen() {
 	);
 
 	useEffect(() => {
-		if (!hasFetchedRef.current) {
-			hasFetchedRef.current = true;
-			fetchCalendar();
+		const fetchKey = `${todayDate}:${googleAccessToken ?? "disconnected"}`;
+		if (lastCalendarFetchKeyRef.current === fetchKey) {
+			return;
 		}
-	}, [fetchCalendar]);
+		lastCalendarFetchKeyRef.current = fetchKey;
+
+		if (!googleAccessToken) {
+			setCalendarEvents([]);
+			setCalendarRecommendation(null);
+			setCalendarLastFetched(null);
+			return;
+		}
+
+		void fetchCalendar(true);
+	}, [
+		fetchCalendar,
+		googleAccessToken,
+		setCalendarEvents,
+		setCalendarLastFetched,
+		setCalendarRecommendation,
+		todayDate,
+	]);
+
+	useEffect(() => {
+		setIsRecommendationExpanded(false);
+	}, [visibleRecommendation]);
 
 	return (
 		<View style={styles.container}>
@@ -440,7 +510,7 @@ export default function HomeScreen() {
 														{event.title}
 													</Text>
 													<Text style={styles.calendarItemTime}>
-														{formatEventTime(event.start)}
+														{formatEventWindow(event.start, event.end)}
 													</Text>
 												</View>
 											</View>
@@ -465,13 +535,25 @@ export default function HomeScreen() {
 													},
 												]}
 											/>
-											<View style={styles.calendarItemContent}>
+											<View style={styles.calendarRecommendationContent}>
 												<Text
 													style={styles.calendarRecommendationText}
-													numberOfLines={3}
+													numberOfLines={
+														isRecommendationExpanded ? undefined : 3
+													}
 												>
 													{visibleRecommendation}
 												</Text>
+												<Pressable
+													style={styles.calendarRecommendationToggle}
+													onPress={() =>
+														setIsRecommendationExpanded((value) => !value)
+													}
+												>
+													<Text style={styles.calendarRecommendationToggleText}>
+														{isRecommendationExpanded ? "Show less" : "Show more"}
+													</Text>
+												</Pressable>
 											</View>
 										</View>
 									</>
@@ -711,6 +793,12 @@ const styles = StyleSheet.create({
 		justifyContent: "space-between",
 		alignItems: "center",
 	},
+	calendarRecommendationContent: {
+		flex: 1,
+		alignItems: "flex-start",
+		paddingRight: 6,
+		paddingVertical: 2,
+	},
 	calendarItemTitle: {
 		color: ReEntryColors.textPrimary,
 		fontSize: 15,
@@ -738,6 +826,18 @@ const styles = StyleSheet.create({
 		lineHeight: 18,
 		fontFamily: Fonts.sans,
 		flex: 1,
+	},
+	calendarRecommendationToggle: {
+		alignSelf: "flex-end",
+		marginTop: 10,
+		paddingTop: 2,
+		paddingRight: 2,
+	},
+	calendarRecommendationToggleText: {
+		color: ReEntryColors.primary,
+		fontSize: 13,
+		fontWeight: "600",
+		fontFamily: Fonts.sans,
 	},
 	calendarConnectCard: {
 		backgroundColor: ReEntryColors.surface,
