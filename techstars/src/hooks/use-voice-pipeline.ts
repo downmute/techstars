@@ -12,6 +12,8 @@ import {
 let initialized = false;
 let initPromise: Promise<void> | null = null;
 let activeWelcomePromise: Promise<void> | null = null;
+let lastWelcomeAwaitStartedAt = 0;
+const WELCOME_DUPLICATE_GUARD_MS = 8000;
 
 async function initPipeline() {
 	if (initialized) {
@@ -51,12 +53,19 @@ export function useVoicePipeline() {
 					if (!hasWelcomedRef.current) {
 						hasWelcomedRef.current = true;
 						try {
-							if (!activeWelcomePromise) {
+							const now = Date.now();
+							if (
+								!activeWelcomePromise &&
+								now - lastWelcomeAwaitStartedAt >= WELCOME_DUPLICATE_GUARD_MS
+							) {
+								lastWelcomeAwaitStartedAt = now;
 								activeWelcomePromise = runVoiceWelcome().finally(() => {
 									activeWelcomePromise = null;
 								});
 							}
-							await activeWelcomePromise;
+							if (activeWelcomePromise) {
+								await activeWelcomePromise;
+							}
 						} catch {
 							// If the proactive opener fails, still start passive listening.
 						}

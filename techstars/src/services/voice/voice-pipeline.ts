@@ -76,6 +76,7 @@ const LIVE_EOU_SILENCE_CONFIRM_MS = 350;
 const LIVE_EOU_STABILITY_MS = 650;
 const LIVE_PERSISTENT_EOU_FLUSH_MS = 1200;
 const LIVE_PERSISTENT_EOU_MIN_WORDS = 3;
+const VOICE_WELCOME_DEBOUNCE_MS = 8000;
 
 let currentState: PipelineState = "idle";
 let passiveListeningEnabled = false;
@@ -103,6 +104,7 @@ let liveLastDecodeAt = 0;
 let liveEouCandidateTranscript = "";
 let liveEouCandidateCount = 0;
 let liveFirstEouAt = 0;
+let lastVoiceWelcomeStartedAt = 0;
 
 interface WellbeingContextSnapshot {
 	aggregatedHistory: SurveyHistory;
@@ -654,6 +656,7 @@ async function streamAssistantReply(messages: ChatMessage[]): Promise<void> {
 	let sentenceBuffer = "";
 	let finalized = false;
 	let llmMode: "streaming" | "non-streaming" = "streaming";
+	let hasQueuedSpeech = false;
 
 	const maybeStartSpeech = () => {
 		if (speechPromise || speechQueue.length === 0) {
@@ -681,6 +684,7 @@ async function streamAssistantReply(messages: ChatMessage[]): Promise<void> {
 		for (const sentence of completed) {
 			if (isMeaningfulText(sentence)) {
 				speechQueue.push(sentence);
+				hasQueuedSpeech = true;
 			}
 		}
 		sentenceBuffer = remainder;
@@ -720,18 +724,21 @@ async function streamAssistantReply(messages: ChatMessage[]): Promise<void> {
 						speechQueue.length = 0;
 						sentenceBuffer = "";
 						speechQueue.push(fullUtterance);
+						hasQueuedSpeech = true;
 						maybeStartSpeech();
 					}
 				} else {
 					const tail = normalizeWhitespace(sentenceBuffer);
 					if (tail && isMeaningfulText(tail)) {
 						speechQueue.push(tail);
+						hasQueuedSpeech = true;
 						sentenceBuffer = "";
 						maybeStartSpeech();
-					} else {
+					} else if (!hasQueuedSpeech) {
 						const fallbackUtterance = normalizeWhitespace(fullResponse);
 						if (fallbackUtterance && isMeaningfulText(fallbackUtterance)) {
 							speechQueue.push(fallbackUtterance);
+							hasQueuedSpeech = true;
 							sentenceBuffer = "";
 							maybeStartSpeech();
 						}
@@ -1356,6 +1363,10 @@ export async function runVoiceWelcome(): Promise<void> {
 	if (conversationStore.messages.length > 0) {
 		return;
 	}
+	if (Date.now() - lastVoiceWelcomeStartedAt < VOICE_WELCOME_DEBOUNCE_MS) {
+		return;
+	}
+	lastVoiceWelcomeStartedAt = Date.now();
 
 	const { userName } = useAppStore.getState();
 	const memories = await getTopMemories(10);

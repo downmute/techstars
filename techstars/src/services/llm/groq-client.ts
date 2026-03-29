@@ -7,7 +7,8 @@ import {
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MODEL =
-	process.env.EXPO_PUBLIC_GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
+	process.env.EXPO_PUBLIC_GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
+const DISABLE_GROQ_STREAMING = true;
 
 export interface ChatMessage {
 	role: "system" | "user" | "assistant" | "tool";
@@ -86,15 +87,27 @@ async function parseSSE(
 	}
 }
 
-function buildRequestBody(messages: ChatMessage[], stream: boolean) {
-	return {
+function buildRequestBody(
+	messages: ChatMessage[],
+	stream: boolean,
+	includeTools = true,
+) {
+	const baseBody = {
 		model: MODEL,
 		messages,
-		tools: TOOL_DEFINITIONS,
-		tool_choice: "auto",
 		stream,
 		max_completion_tokens: 512,
 		temperature: 0.7,
+	};
+
+	if (!includeTools) {
+		return baseBody;
+	}
+
+	return {
+		...baseBody,
+		tools: TOOL_DEFINITIONS,
+		tool_choice: "auto" as const,
 	};
 }
 
@@ -102,6 +115,7 @@ async function requestChatCompletion(
 	key: string,
 	messages: ChatMessage[],
 	stream: boolean,
+	includeTools = true,
 ) {
 	return expoFetch(GROQ_API_URL, {
 		method: "POST",
@@ -109,8 +123,70 @@ async function requestChatCompletion(
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${key}`,
 		},
-		body: JSON.stringify(buildRequestBody(messages, stream)),
+		body: JSON.stringify(buildRequestBody(messages, stream, includeTools)),
 	});
+}
+
+async function completeChatNonStreaming(
+	key: string,
+	messages: ChatMessage[],
+	callbacks: StreamCallbacks,
+	depth: number,
+	includeTools = true,
+) {
+	callbacks.onMode?.("non-streaming");
+	const fallbackResponse = await requestChatCompletion(
+		key,
+		messages,
+		false,
+		includeTools,
+	);
+	if (!fallbackResponse.ok) {
+		const fallbackErr = await fallbackResponse.text();
+		throw new Error(`Groq API error ${fallbackResponse.status}: ${fallbackErr}`);
+	}
+
+	const payload = (await fallbackResponse.json()) as GroqResponseChunk;
+	const message = payload.choices?.[0]?.message;
+	const content = message?.content ?? "";
+	const responseToolCalls = message?.tool_calls ?? [];
+	console.log(
+		`[Groq] Non-streaming reply received chars=${content.length} toolCalls=${responseToolCalls.length} includeTools=${includeTools}`,
+	);
+
+	if (responseToolCalls.length > 0) {
+		const updatedMessages: ChatMessage[] = [
+			...messages,
+			{
+				role: "assistant",
+				content: content ?? "",
+				tool_calls: responseToolCalls,
+			},
+		];
+
+		for (const tc of responseToolCalls) {
+			const result = await executeToolCall(tc);
+			updatedMessages.push({
+				role: "tool",
+				content: result,
+				tool_call_id: tc.id,
+				name: tc.function.name,
+			});
+		}
+
+		await streamChat(updatedMessages, callbacks, depth + 1);
+		return;
+	}
+
+	if (!content.trim() && includeTools) {
+		console.warn(
+			"[Groq] Non-streaming reply returned empty content with tools enabled. Retrying without tools.",
+		);
+		await completeChatNonStreaming(key, messages, callbacks, depth, false);
+		return;
+	}
+
+	callbacks.onDone(content);
 }
 
 // Core streaming chat — handles tool calls recursively
@@ -132,6 +208,11 @@ export async function streamChat(
 		{};
 
 	try {
+		if (DISABLE_GROQ_STREAMING) {
+			await completeChatNonStreaming(key, messages, callbacks, depth);
+			return;
+		}
+
 		const response = await requestChatCompletion(key, messages, true);
 
 		if (!response.ok) {
@@ -151,56 +232,7 @@ export async function streamChat(
 			console.warn(
 				`[Groq] Streaming response body unavailable in this runtime. Falling back to non-streaming chat completion. contentType=${contentType} transferEncoding=${transferEncoding} contentLength=${contentLength} requestId=${requestId}`,
 			);
-			callbacks.onMode?.("non-streaming");
-			const fallbackResponse = await requestChatCompletion(
-				key,
-				messages,
-				false,
-			);
-			if (!fallbackResponse.ok) {
-				const fallbackErr = await fallbackResponse.text();
-				throw new Error(
-					`Groq API error ${fallbackResponse.status}: ${fallbackErr}`,
-				);
-			}
-
-			const payload = (await fallbackResponse.json()) as GroqResponseChunk;
-			const message = payload.choices?.[0]?.message;
-			const content = message?.content ?? "";
-			const responseToolCalls = message?.tool_calls ?? [];
-			console.log(
-				`[Groq] Non-streaming reply received chars=${content.length} toolCalls=${responseToolCalls.length}`,
-			);
-
-			if (responseToolCalls.length > 0) {
-				const updatedMessages: ChatMessage[] = [
-					...messages,
-					{
-						role: "assistant",
-						content: content ?? "",
-						tool_calls: responseToolCalls,
-					},
-				];
-
-				for (const tc of responseToolCalls) {
-					const result = await executeToolCall(tc);
-					updatedMessages.push({
-						role: "tool",
-						content: result,
-						tool_call_id: tc.id,
-						name: tc.function.name,
-					});
-				}
-
-				await streamChat(updatedMessages, callbacks, depth + 1);
-				return;
-			}
-
-			if (content) {
-				// In non-streaming mode we deliver the full reply at once so TTS can
-				// speak the entire message naturally instead of sentence chunking.
-			}
-			callbacks.onDone(content);
+			await completeChatNonStreaming(key, messages, callbacks, depth);
 			return;
 		}
 
@@ -273,6 +305,13 @@ export async function streamChat(
 			// Recurse to get final response
 			await streamChat(updatedMessages, callbacks, depth + 1);
 		} else {
+			if (!accumulatedText.trim()) {
+				console.warn(
+					"[Groq] Streaming reply produced no text tokens. Falling back to non-streaming chat completion.",
+				);
+				await completeChatNonStreaming(key, messages, callbacks, depth);
+				return;
+			}
 			console.log(
 				`[Groq] Streaming reply complete chars=${accumulatedText.length}`,
 			);
