@@ -1,0 +1,22 @@
+{
+  "devFiles": [],
+  "ampDevFiles": [],
+  "polyfillFiles": [
+    "static/chunks/0vfc_next_dist_build_polyfills_polyfill-nomodule.js"
+  ],
+  "lowPriorityFiles": [],
+  "rootMainFiles": [
+    "static/chunks/[turbopack]_browser_dev_hmr-client_hmr-client_ts_0y6bj6b._.js",
+    "static/chunks/0vfc_next_dist_compiled_next-devtools_index_01.ct6c.js",
+    "static/chunks/0vfc_next_dist_compiled_react-dom_07b_g5-._.js",
+    "static/chunks/0vfc_next_dist_compiled_react-server-dom-turbopack_0ylr4e.._.js",
+    "static/chunks/0vfc_next_dist_compiled_11onb_g._.js",
+    "static/chunks/0vfc_next_dist_client_0sn.0kj._.js",
+    "static/chunks/0vfc_next_dist_0vj24yv._.js",
+    "static/chunks/0vfc_@swc_helpers_cjs_0d.ck19._.js",
+    "static/chunks/Desktop_Programming_Web Projects_Vela_techstars_clinic-dashboard_0rqeker._.js",
+    "static/chunks/0nkw_Programming_Web Projects_Vela_techstars_clinic-dashboard_0qs5hcv._.js"
+  ],
+  "pages": {},
+  "ampFirstPages": []
+}
