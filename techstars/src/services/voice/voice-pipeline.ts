@@ -52,6 +52,7 @@ const PASSIVE_LOOP_POLL_MS = 140;
 const MIN_SPEECH_LENGTH = 2;
 const MIN_SILENCE_METERING = -45;
 const EMPTY_SLICES_BEFORE_FLUSH = 2;
+const LIVE_FIRST_DECODE_SAMPLES = Math.floor(STT_SAMPLE_RATE * 0.45);
 const LIVE_MIN_TRANSCRIBE_SAMPLES = Math.floor(STT_SAMPLE_RATE * 0.18);
 const LIVE_MAX_UTTERANCE_SAMPLES = STT_SAMPLE_RATE * 12;
 const LIVE_SILENCE_FLUSH_MS = 1200;
@@ -82,6 +83,8 @@ let liveVadStream: SileroVadStream | null = null;
 let liveChunkQueue: Promise<void> = Promise.resolve();
 let liveParakeetStarted = false;
 let liveLastDecodeAt = 0;
+let liveEouCandidateTranscript = "";
+let liveEouCandidateCount = 0;
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -214,6 +217,8 @@ function resetLiveAudioBuffer() {
 	livePreRollSampleCount = 0;
 	liveParakeetStarted = false;
 	liveLastDecodeAt = 0;
+	liveEouCandidateTranscript = "";
+	liveEouCandidateCount = 0;
 }
 
 function concatenateAudioChunks(
@@ -252,9 +257,6 @@ function normalizeAudioForStt(audio: Float32Array): Float32Array {
 		boosted[i] = Math.max(-1, Math.min(1, sample));
 	}
 
-	console.log(
-		`[VoicePipeline] normalized live audio peak=${peak.toFixed(4)} gain=${gain.toFixed(2)}`,
-	);
 	return boosted;
 }
 
@@ -333,6 +335,7 @@ async function streamAssistantReply(messages: ChatMessage[]): Promise<void> {
 	let fullResponse = "";
 	let sentenceBuffer = "";
 	let finalized = false;
+	let llmMode: "streaming" | "non-streaming" = "streaming";
 
 	const maybeStartSpeech = () => {
 		if (speechPromise || speechQueue.length === 0) {
@@ -368,6 +371,9 @@ async function streamAssistantReply(messages: ChatMessage[]): Promise<void> {
 
 	await new Promise<void>((resolve, reject) => {
 		void streamChat(messages, {
+			onMode: (mode) => {
+				llmMode = mode;
+			},
 			onToken: (token) => {
 				if (generation !== turnGeneration) {
 					return;
@@ -387,11 +393,21 @@ async function streamAssistantReply(messages: ChatMessage[]): Promise<void> {
 				fullResponse = text || fullResponse;
 				conversationStore.updateLastAssistantMessage(fullResponse);
 
-				const tail = normalizeWhitespace(sentenceBuffer);
-				if (tail && isMeaningfulText(tail)) {
-					speechQueue.push(tail);
-					sentenceBuffer = "";
-					maybeStartSpeech();
+				if (llmMode === "non-streaming") {
+					const fullUtterance = normalizeWhitespace(fullResponse);
+					if (fullUtterance && isMeaningfulText(fullUtterance)) {
+						speechQueue.length = 0;
+						sentenceBuffer = "";
+						speechQueue.push(fullUtterance);
+						maybeStartSpeech();
+					}
+				} else {
+					const tail = normalizeWhitespace(sentenceBuffer);
+					if (tail && isMeaningfulText(tail)) {
+						speechQueue.push(tail);
+						sentenceBuffer = "";
+						maybeStartSpeech();
+					}
 				}
 
 				finalized = true;
@@ -546,20 +562,14 @@ function maybeDecodeLiveUtterance(trigger: "periodic" | "silence") {
 	if (currentState === "speaking" || currentState === "processing") {
 		return;
 	}
+	const minSamples = liveParakeetStarted
+		? LIVE_MIN_TRANSCRIBE_SAMPLES
+		: LIVE_FIRST_DECODE_SAMPLES;
 	if (
 		liveTranscribePromise ||
 		!liveSpeechActive ||
-		liveAudioSampleCount < LIVE_MIN_TRANSCRIBE_SAMPLES
+		liveAudioSampleCount < minSamples
 	) {
-		if (
-			liveSpeechActive &&
-			liveAudioSampleCount > 0 &&
-			liveAudioSampleCount < LIVE_MIN_TRANSCRIBE_SAMPLES
-		) {
-			console.log(
-				`[VoicePipeline] waiting for more audio samples=${liveAudioSampleCount} min=${LIVE_MIN_TRANSCRIBE_SAMPLES}`,
-			);
-		}
 		return;
 	}
 	const silenceMs = Date.now() - liveLastVoiceAt;
@@ -583,6 +593,9 @@ function maybeDecodeLiveUtterance(trigger: "periodic" | "silence") {
 		const normalizedAudio = normalizeAudioForStt(audio);
 		liveLastDecodeSampleCount = liveAudioSampleCount;
 		liveLastDecodeAt = Date.now();
+		console.log(
+			`[Parakeet] decode attempt trigger=${trigger} samples=${normalizedAudio.length}`,
+		);
 		if (!liveParakeetStarted) {
 			liveParakeetStarted = true;
 			console.log(
@@ -596,8 +609,29 @@ function maybeDecodeLiveUtterance(trigger: "periodic" | "silence") {
 		}
 
 		if (text && sttResult.endOfUtterance) {
-			await flushLiveTranscript("parakeet-eou");
-			return;
+			const stabilizedAgainstPrevious =
+				liveEouCandidateCount > 0 &&
+				(text === liveEouCandidateTranscript ||
+					text.startsWith(liveEouCandidateTranscript) ||
+					liveEouCandidateTranscript.startsWith(text));
+			if (stabilizedAgainstPrevious) {
+				liveEouCandidateCount += 1;
+			} else {
+				liveEouCandidateTranscript = text;
+				liveEouCandidateCount = 1;
+			}
+
+			console.log(
+				`[Parakeet] EOU candidate count=${liveEouCandidateCount} text="${text.slice(0, 120)}"`,
+			);
+
+			if (liveEouCandidateCount >= 2) {
+				await flushLiveTranscript("parakeet-eou");
+				return;
+			}
+		} else if (text) {
+			liveEouCandidateTranscript = "";
+			liveEouCandidateCount = 0;
 		}
 	})()
 		.catch((error) => {

@@ -29,6 +29,9 @@ import {
 
 export type AmplitudeCallback = (amplitude: number) => void;
 const POCKET_TTS_SYNTH_TIMEOUT_MS = 20000;
+const POCKET_TTS_WARMUP_TRIM_SAMPLES = 2880;
+const POCKET_TTS_TARGET_PEAK = 0.82;
+const POCKET_TTS_MAX_GAIN = 8;
 
 let pocketTTSAvailable = false;
 let activePlayer: AudioPlayer | null = null;
@@ -50,6 +53,70 @@ function formatPlaybackStatus(status: AudioStatus): string {
 	]
 		.filter(Boolean)
 		.join(" ");
+}
+
+function getAudioStats(audio: Float32Array): {
+	peak: number;
+	rms: number;
+} {
+	if (audio.length === 0) {
+		return { peak: 0, rms: 0 };
+	}
+
+	let peak = 0;
+	let sumSquares = 0;
+	for (let i = 0; i < audio.length; i += 1) {
+		const sample = audio[i] ?? 0;
+		const abs = Math.abs(sample);
+		if (abs > peak) {
+			peak = abs;
+		}
+		sumSquares += sample * sample;
+	}
+
+	return {
+		peak,
+		rms: Math.sqrt(sumSquares / audio.length),
+	};
+}
+
+function preparePocketTtsAudio(audio: Float32Array): Float32Array {
+	const trimmed =
+		audio.length > POCKET_TTS_WARMUP_TRIM_SAMPLES
+			? audio.subarray(POCKET_TTS_WARMUP_TRIM_SAMPLES)
+			: audio;
+
+	const before = getAudioStats(trimmed);
+	if (trimmed.length === 0 || before.peak <= 0) {
+		console.log(
+			`[PocketTTS] audio stats pre peak=${before.peak.toFixed(4)} rms=${before.rms.toFixed(4)} trimSamples=${Math.min(
+				audio.length,
+				POCKET_TTS_WARMUP_TRIM_SAMPLES,
+			)} gain=1.00`,
+		);
+		return trimmed;
+	}
+
+	const gain = Math.min(POCKET_TTS_MAX_GAIN, POCKET_TTS_TARGET_PEAK / before.peak);
+	const prepared =
+		gain > 1.05 ? new Float32Array(trimmed.length) : new Float32Array(trimmed);
+
+	if (gain > 1.05) {
+		for (let i = 0; i < trimmed.length; i += 1) {
+			const boosted = (trimmed[i] ?? 0) * gain;
+			prepared[i] = Math.max(-1, Math.min(1, boosted));
+		}
+	}
+
+	const after = getAudioStats(prepared);
+	console.log(
+		`[PocketTTS] audio stats pre peak=${before.peak.toFixed(4)} rms=${before.rms.toFixed(4)} post peak=${after.peak.toFixed(4)} rms=${after.rms.toFixed(4)} trimSamples=${Math.min(
+			audio.length,
+			POCKET_TTS_WARMUP_TRIM_SAMPLES,
+		)} gain=${gain.toFixed(2)}`,
+	);
+
+	return prepared;
 }
 
 async function checkPocketTTSModels(): Promise<boolean> {
@@ -203,7 +270,7 @@ async function playPocketTTS(
 	await setAudioModeAsync({
 		allowsRecording: false,
 		playsInSilentMode: true,
-		interruptionMode: "mixWithOthers",
+		interruptionMode: "doNotMix",
 	});
 	console.log("[PocketTTS] playback audio mode ready");
 
@@ -358,10 +425,11 @@ export async function speak(
 	if (localReady) {
 		try {
 			console.log(`[PocketTTS] synthesis start chars=${text.length}`);
-			const audio = await synthesizePocketTTSWithTimeout(text);
-			console.log(`[PocketTTS] synthesis complete samples=${audio.length}`);
-			if (audio.length > 0) {
-				await playPocketTTS(audio, onAmplitude);
+			const rawAudio = await synthesizePocketTTSWithTimeout(text);
+			console.log(`[PocketTTS] synthesis complete samples=${rawAudio.length}`);
+			const preparedAudio = preparePocketTtsAudio(rawAudio);
+			if (preparedAudio.length > 0) {
+				await playPocketTTS(preparedAudio, onAmplitude);
 				return;
 			}
 		} catch (error) {

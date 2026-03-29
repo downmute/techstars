@@ -19,6 +19,17 @@ WebBrowser.maybeCompleteAuthSession();
 
 const GOOGLE_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 
+function getGoogleIosRedirectScheme(clientId: string): string | null {
+	if (!clientId || !clientId.endsWith(".apps.googleusercontent.com")) {
+		return null;
+	}
+
+	return `com.googleusercontent.apps.${clientId.replace(
+		/\.apps\.googleusercontent\.com$/,
+		"",
+	)}`;
+}
+
 const DISCOVERY = {
 	authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
 	tokenEndpoint: "https://oauth2.googleapis.com/token",
@@ -89,7 +100,15 @@ const backStyles = StyleSheet.create({
 export default function CalendarScreen() {
 	const setGoogleAccessToken = useAppStore((s) => s.setGoogleAccessToken);
 
-	const redirectUri = makeRedirectUri({ scheme: "vela" });
+	const googleNativeRedirectScheme =
+		getGoogleIosRedirectScheme(GOOGLE_CLIENT_ID);
+	const redirectUri = makeRedirectUri({
+		scheme: "vela",
+		path: "oauthredirect",
+		native: googleNativeRedirectScheme
+			? `${googleNativeRedirectScheme}:/oauthredirect`
+			: undefined,
+	});
 
 	const [request, response, promptAsync] = useAuthRequest(
 		{

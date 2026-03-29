@@ -766,12 +766,18 @@ class ParakeetOrtRuntime {
 		audio16k: Float32Array,
 	): Promise<ParakeetTranscriptionResult> {
 		if (audio16k.length < MEL_HOP_LENGTH) {
+			console.log(
+				`[Parakeet] empty decode reason=short-audio samples=${audio16k.length}`,
+			);
 			return { text: "", sawEou: false, sawEob: false };
 		}
 
 		const { features, frameCount, validLength } =
 			this.melProcessor.process(audio16k);
 		if (!features.length || frameCount <= 0 || validLength <= 0) {
+			console.log(
+				`[Parakeet] empty decode reason=no-features samples=${audio16k.length} frames=${frameCount} valid=${validLength}`,
+			);
 			return { text: "", sawEou: false, sawEob: false };
 		}
 
@@ -821,6 +827,9 @@ class ParakeetOrtRuntime {
 			const featureSize = likelyFeatureDim === 1 ? dim1 : dim2;
 			const encodedFrames = likelyFeatureDim === 1 ? dim2 : dim1;
 			if (!featureSize || !encodedFrames) {
+				console.log(
+					`[Parakeet] empty decode reason=no-encoder-shape samples=${audio16k.length}`,
+				);
 				return { text: "", sawEou: false, sawEob: false };
 			}
 
@@ -952,6 +961,10 @@ class ParakeetOrtRuntime {
 			if (text) {
 				console.log(
 					`[Parakeet] decoded tokens=${tokenIds.length} eou=${String(sawEou)} blank=${blankId} dist=${distributionSize} text="${text.slice(0, 120)}"`,
+				);
+			} else {
+				console.log(
+					`[Parakeet] empty decode tokens=${tokenIds.length} eou=${String(sawEou)} blank=${blankId} dist=${distributionSize}`,
 				);
 			}
 

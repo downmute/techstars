@@ -20,6 +20,7 @@ interface StreamCallbacks {
 	onToken: (token: string) => void;
 	onDone: (fullText: string) => void;
 	onError: (error: Error) => void;
+	onMode?: (mode: "streaming" | "non-streaming") => void;
 }
 
 interface GroqToolCallDelta {
@@ -128,9 +129,18 @@ export async function streamChat(
 		}
 
 		if (!response.body) {
+			const contentType = response.headers.get("content-type") ?? "unknown";
+			const transferEncoding =
+				response.headers.get("transfer-encoding") ?? "unknown";
+			const contentLength = response.headers.get("content-length") ?? "unknown";
+			const requestId =
+				response.headers.get("x-request-id") ??
+				response.headers.get("x-groq-request-id") ??
+				"unknown";
 			console.warn(
-				"[Groq] Streaming response body unavailable in this runtime. Falling back to non-streaming chat completion.",
+				`[Groq] Streaming response body unavailable in this runtime. Falling back to non-streaming chat completion. contentType=${contentType} transferEncoding=${transferEncoding} contentLength=${contentLength} requestId=${requestId}`,
 			);
+			callbacks.onMode?.("non-streaming");
 			const fallbackResponse = await requestChatCompletion(
 				key,
 				messages,
@@ -176,11 +186,14 @@ export async function streamChat(
 			}
 
 			if (content) {
-				callbacks.onToken(content);
+				// In non-streaming mode we deliver the full reply at once so TTS can
+				// speak the entire message naturally instead of sentence chunking.
 			}
 			callbacks.onDone(content);
 			return;
 		}
+
+		callbacks.onMode?.("streaming");
 
 		await parseSSE(response.body, (data) => {
 			let chunk: GroqResponseChunk;
