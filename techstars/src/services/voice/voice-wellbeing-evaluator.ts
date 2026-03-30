@@ -1,4 +1,8 @@
-import { chatStructuredOnce, type ChatMessage } from "@/services/llm/groq-client";
+import {
+	chatJsonObjectOnce,
+	chatStructuredOnce,
+	type ChatMessage,
+} from "@/services/llm/groq-client";
 import type { Message } from "@/state/conversation-state";
 import {
 	formatRecentSurveyContext,
@@ -88,9 +92,46 @@ Small conversational hints should usually move a score only modestly.
 Ignore obvious STT artifacts like repeated words or malformed fragments when scoring.
 Use "none" for suggestedFocus only when all five domains are complete.`;
 
+const JSON_OBJECT_FALLBACK_PROMPT = `You are Vela's hidden postpartum wellbeing scorer.
+
+Return JSON only in exactly this shape:
+{
+  "scores": {
+    "moodDepression": integer or null,
+    "anxiety": integer or null,
+    "sleepFatigue": integer or null,
+    "physicalRecovery": integer or null,
+    "socialSupport": integer or null
+  },
+  "coverage": {
+    "moodDepression": boolean,
+    "anxiety": boolean,
+    "sleepFatigue": boolean,
+    "physicalRecovery": boolean,
+    "socialSupport": boolean
+  },
+  "completion": {
+    "moodDepression": boolean,
+    "anxiety": boolean,
+    "sleepFatigue": boolean,
+    "physicalRecovery": boolean,
+    "socialSupport": boolean
+  },
+  "allScoresReady": boolean,
+  "suggestedFocus": "moodDepression" | "anxiety" | "sleepFatigue" | "physicalRecovery" | "socialSupport" | "none"
+}
+
+Rules:
+- Scores are 0-100 where 100 means doing very well today.
+- Use null if a score is unclear.
+- Change scores gradually from the aggregate anchor unless the transcript contains strong direct evidence.
+- Ignore obvious STT artifacts and repeated fragments.
+- Use "none" only if all five domains are complete.`;
+
 const NULLABLE_SCORE_SCHEMA = {
 	anyOf: [{ type: "integer" }, { type: "null" }],
 } as const;
+const SCORING_MODEL = "openai/gpt-oss-120b";
 
 const VOICE_WELLBEING_SCHEMA: Record<string, unknown> = {
 	type: "object",
@@ -162,6 +203,43 @@ function normalizeDomainFlags(
 	return normalized;
 }
 
+function parseEvaluationPayload(parsed: Record<string, unknown>): VoiceWellbeingEvaluation {
+	const rawScores =
+		parsed.scores && typeof parsed.scores === "object"
+			? (parsed.scores as Record<string, unknown>)
+			: {};
+	const scores: SurveyScores = {};
+	for (const category of surveyCategories) {
+		const value = clampScore(rawScores[category]);
+		if (value !== null) {
+			scores[category] = value;
+		}
+	}
+
+	const coverageFlags = normalizeDomainFlags(parsed.coverage);
+	const completionFlags = normalizeDomainFlags(parsed.completion);
+	const coveredDomains = surveyCategories.filter(
+		(category) => coverageFlags[category],
+	);
+	const completedDomains = surveyCategories.filter(
+		(category) => completionFlags[category],
+	);
+	const suggestedFocus =
+		parsed.suggestedFocus === "none"
+			? null
+			: surveyCategories.includes(parsed.suggestedFocus as SurveyCategory)
+				? (parsed.suggestedFocus as SurveyCategory)
+				: null;
+
+	return {
+		scores,
+		coveredDomains,
+		completedDomains,
+		allScoresReady: Boolean(parsed.allScoresReady),
+		suggestedFocus,
+	};
+}
+
 export async function evaluateVoiceWellbeing(args: {
 	messages: Message[];
 	selfReportedScores?: SurveyScores | null;
@@ -193,7 +271,7 @@ export async function evaluateVoiceWellbeing(args: {
 		strict: boolean,
 	): Promise<VoiceWellbeingEvaluation> => {
 		const parsed = (await chatStructuredOnce<Record<string, unknown>>({
-			model: "openai/gpt-oss-20b",
+			model: SCORING_MODEL,
 			messages: buildMessages(transcriptText),
 			schemaName: "voice_wellbeing_scores",
 			schema: VOICE_WELLBEING_SCHEMA,
@@ -202,40 +280,33 @@ export async function evaluateVoiceWellbeing(args: {
 			temperature: 0,
 		})) as Record<string, unknown>;
 
-		const rawScores =
-			parsed.scores && typeof parsed.scores === "object"
-				? (parsed.scores as Record<string, unknown>)
-				: {};
-		const scores: SurveyScores = {};
-		for (const category of surveyCategories) {
-			const value = clampScore(rawScores[category]);
-			if (value !== null) {
-				scores[category] = value;
-			}
-		}
+		return parseEvaluationPayload(parsed);
+	};
 
-		const coverageFlags = normalizeDomainFlags(parsed.coverage);
-		const completionFlags = normalizeDomainFlags(parsed.completion);
-		const coveredDomains = surveyCategories.filter(
-			(category) => coverageFlags[category],
-		);
-		const completedDomains = surveyCategories.filter(
-			(category) => completionFlags[category],
-		);
-		const suggestedFocus =
-			parsed.suggestedFocus === "none"
-				? null
-				: surveyCategories.includes(parsed.suggestedFocus as SurveyCategory)
-					? (parsed.suggestedFocus as SurveyCategory)
-					: null;
+	const attemptJsonObject = async (
+		transcriptText: string,
+		maxCompletionTokens: number,
+	): Promise<VoiceWellbeingEvaluation> => {
+		const parsed = (await chatJsonObjectOnce<Record<string, unknown>>({
+			model: SCORING_MODEL,
+			messages: [
+				{ role: "system", content: JSON_OBJECT_FALLBACK_PROMPT },
+				{
+					role: "user",
+					content: [
+						`Self scores today: ${formatScores(args.selfReportedScores)}.`,
+						`Current aggregate anchor today: ${formatScores(args.currentAggregatedScores)}.`,
+						`Recent aggregate trend: ${formatTrendContext(args.recentAggregatedHistory)}.`,
+						"Recent user transcript:",
+						transcriptText,
+					].join("\n"),
+				},
+			],
+			maxCompletionTokens,
+			temperature: 0,
+		})) as Record<string, unknown>;
 
-		return {
-			scores,
-			coveredDomains,
-			completedDomains,
-			allScoresReady: Boolean(parsed.allScoresReady),
-			suggestedFocus,
-		};
+		return parseEvaluationPayload(parsed);
 	};
 
 	try {
@@ -252,7 +323,11 @@ export async function evaluateVoiceWellbeing(args: {
 				if (!fallbackTranscript.trim()) {
 					return null;
 				}
-				return await attempt(fallbackTranscript, 360, false);
+				try {
+					return await attempt(fallbackTranscript, 360, false);
+				} catch {
+					return await attemptJsonObject(fallbackTranscript, 360);
+				}
 			} catch (fallbackError) {
 				console.warn("[VoiceEval] scoring failed:", fallbackError);
 				return null;

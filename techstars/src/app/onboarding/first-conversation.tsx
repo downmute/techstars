@@ -26,7 +26,11 @@ import {
 	initSileroVadRuntime,
 } from "@/services/voice/silero-vad-runtime";
 import { initSTT, resetSTT } from "@/services/voice/stt-engine";
-import { initTTS, speak, stopSpeaking } from "@/services/voice/tts-engine";
+import {
+	initTTS,
+	speakStreaming,
+	stopSpeaking,
+} from "@/services/voice/tts-engine";
 import { getCurrentWeeksPostpartum, useAppStore } from "@/state/app-state";
 import { useOrbStore } from "@/state/orb-state";
 
@@ -149,7 +153,7 @@ export default function FirstConversationScreen() {
 				: "Hi there. I'm Vela. It's wonderful to meet you. Just tap me whenever you'd like to chat.";
 
 			setOrbState("speaking");
-			await speak(greeting);
+			await speakStreaming(greeting);
 			setOrbState("idle");
 		}
 

@@ -18,6 +18,9 @@ const FRAMES_AFTER_EOS = 3;
 const MAX_FRAMES = 500;
 const TEMPERATURE = 0.7;
 const GAUSSIAN_STD = Math.sqrt(TEMPERATURE);
+const NAN_WARMUP_FRAMES = 3;
+const FIRST_CHUNK_FRAMES = 10;
+const NORMAL_CHUNK_FRAMES = 18;
 
 type OrtState = Record<string, OrtTensor>;
 
@@ -868,6 +871,14 @@ export function isPocketTTSReady() {
 	return runtime !== null;
 }
 
+function packLatents(latents: Float32Array[]) {
+	const packed = new Float32Array(latents.length * 32);
+	for (let i = 0; i < latents.length; i += 1) {
+		packed.set(latents[i]!, i * 32);
+	}
+	return packed;
+}
+
 export async function synthesizeWithPocketTTS(
 	text: string,
 ): Promise<Float32Array> {
@@ -963,12 +974,142 @@ export async function synthesizeWithPocketTTS(
 		return new Float32Array(0);
 	}
 
-	const packed = new Float32Array(allLatents.length * 32);
-	for (let i = 0; i < allLatents.length; i += 1) {
-		packed.set(allLatents[i]!, i * 32);
-	}
+	const packed = packLatents(allLatents);
 
 	return runtime.mimiDecoder.decode(packed, allLatents.length);
+}
+
+export async function synthesizeWithPocketTTSStream(args: {
+	text: string;
+	onNext?: (audioChunk: Float32Array) => void | Promise<void>;
+	onEnd?: () => void | Promise<void>;
+}): Promise<void> {
+	const ready = await initPocketTTSRuntime();
+	if (!ready || !runtime) {
+		throw new Error("PocketTTS runtime is not ready");
+	}
+	const currentRuntime = runtime;
+
+	const processed = preprocessText(args.text);
+	const tokenIds = tokenize(
+		processed,
+		currentRuntime.vocab,
+		currentRuntime.unkId,
+		currentRuntime.maxPieceLen,
+	);
+	if (tokenIds.length === 0) {
+		await args.onEnd?.();
+		return;
+	}
+
+	const tokenTensor = new OrtTensor(
+		"int64",
+		new BigInt64Array(tokenIds.map(BigInt)),
+		[1, tokenIds.length],
+	);
+	const textConditionerOutputs = (await currentRuntime.textConditioner.run({
+		token_ids: tokenTensor,
+	})) as Record<string, OrtTensor>;
+	const rawTextEmbedding =
+		textConditionerOutputs[currentRuntime.textConditioner.outputNames[0]!]!;
+	const dims = Array.from(rawTextEmbedding.dims);
+	const textEmbedding =
+		dims.length === 2
+			? new OrtTensor("float32", rawTextEmbedding.data as Float32Array, [
+					1,
+					dims[0]!,
+					dims[1]!,
+				])
+			: rawTextEmbedding;
+	const textEmbeddingDims = Array.from(textEmbedding.dims) as [
+		number,
+		number,
+		number,
+	];
+
+	currentRuntime.backbone.reset();
+	await currentRuntime.backbone.conditionVoice(
+		currentRuntime.voice.data,
+		currentRuntime.voice.shape,
+	);
+	await currentRuntime.backbone.conditionText(
+		textEmbedding.data as Float32Array,
+		textEmbeddingDims,
+	);
+	currentRuntime.mimiDecoder.reset();
+
+	let currentSeq = new Float32Array(32).fill(Number.NaN);
+	const pendingLatents: Float32Array[] = [];
+	let eosStep: number | null = null;
+	let generatedFrames = 0;
+	let emittedFirstChunk = false;
+	const dt = 1 / LSD_STEPS;
+
+	const decodePending = async () => {
+		if (pendingLatents.length === 0) {
+			return;
+		}
+		const packed = packLatents(pendingLatents);
+		const audioChunk = await currentRuntime.mimiDecoder.decode(
+			packed,
+			pendingLatents.length,
+		);
+		pendingLatents.length = 0;
+		if (audioChunk.length > 0) {
+			await args.onNext?.(new Float32Array(audioChunk));
+		}
+	};
+
+	for (let step = 0; step < MAX_FRAMES; step += 1) {
+		const { conditioning, eos } = await currentRuntime.backbone.stepAR(currentSeq);
+		if (eos > EOS_THRESHOLD && eosStep === null) {
+			eosStep = step;
+		}
+
+		const xData = gaussianNoise32();
+		for (let substep = 0; substep < LSD_STEPS; substep += 1) {
+			const sVal = substep / LSD_STEPS;
+			const tVal = sVal + dt;
+			const flowOutputs = (await currentRuntime.flowNet.run({
+				c: conditioning,
+				s: new OrtTensor("float32", new Float32Array([sVal]), [1, 1]),
+				t: new OrtTensor("float32", new Float32Array([tVal]), [1, 1]),
+				x: new OrtTensor("float32", new Float32Array(xData), [1, 32]),
+			})) as Record<string, OrtTensor>;
+			const flowDir = (flowOutputs.flow_dir ??
+				flowOutputs[currentRuntime.flowNet.outputNames[0]!]!)!
+				.data as Float32Array;
+			for (let i = 0; i < 32; i += 1) {
+				xData[i] += flowDir[i]! * dt;
+			}
+		}
+
+		currentSeq = new Float32Array(xData);
+		generatedFrames += 1;
+
+		if (generatedFrames <= NAN_WARMUP_FRAMES) {
+			if (eosStep !== null && step >= eosStep + FRAMES_AFTER_EOS) {
+				break;
+			}
+			continue;
+		}
+
+		pendingLatents.push(new Float32Array(xData));
+		const chunkThreshold = emittedFirstChunk
+			? NORMAL_CHUNK_FRAMES
+			: FIRST_CHUNK_FRAMES;
+		if (pendingLatents.length >= chunkThreshold) {
+			await decodePending();
+			emittedFirstChunk = true;
+		}
+
+		if (eosStep !== null && step >= eosStep + FRAMES_AFTER_EOS) {
+			break;
+		}
+	}
+
+	await decodePending();
+	await args.onEnd?.();
 }
 
 export function disposePocketTTSRuntime() {

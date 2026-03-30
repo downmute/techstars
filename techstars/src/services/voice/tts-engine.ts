@@ -13,11 +13,13 @@ import {
 } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Speech from "expo-speech";
+import { AudioContext, AudioManager } from "react-native-audio-api";
 
 import { getModelPath } from "@/services/models/model-registry";
 import {
 	initPocketTTSRuntime,
 	isPocketTTSReady,
+	synthesizeWithPocketTTSStream,
 	synthesizeWithPocketTTS,
 } from "./pocket-tts-runtime";
 import {
@@ -26,12 +28,15 @@ import {
 	float32ToWavBytes,
 	TTS_SAMPLE_RATE,
 } from "./wav-utils";
+import { StreamedAudioPlayer } from "./streamed-audio-player";
 
 export type AmplitudeCallback = (amplitude: number) => void;
 const POCKET_TTS_SYNTH_TIMEOUT_MS = 20000;
 const POCKET_TTS_WARMUP_TRIM_SAMPLES = 2880;
 const POCKET_TTS_TARGET_PEAK = 0.82;
 const POCKET_TTS_MAX_GAIN = 8;
+const STREAM_FIRST_PLAYBACK_BUFFER_SAMPLES = Math.floor(TTS_SAMPLE_RATE * 0.85);
+const STREAM_NORMAL_PLAYBACK_BUFFER_SAMPLES = Math.floor(TTS_SAMPLE_RATE * 1.1);
 
 let pocketTTSAvailable = false;
 let activePlayer: AudioPlayer | null = null;
@@ -40,6 +45,12 @@ let activeAmplitudeInterval: ReturnType<typeof setInterval> | null = null;
 let activeTempFile: string | null = null;
 let pocketTTSWarmPromise: Promise<void> | null = null;
 let pocketTTSWarmed = false;
+let initTTSPromise: Promise<void> | null = null;
+let playbackInstanceCounter = 0;
+let streamedAudioContext: AudioContext | null = null;
+let streamedAudioPlayer: StreamedAudioPlayer | null = null;
+let streamedAudioPlayerPromise: Promise<StreamedAudioPlayer> | null = null;
+let streamedPlaybackIdleResolver: (() => void) | null = null;
 
 function formatPlaybackStatus(status: AudioStatus): string {
 	return [
@@ -82,18 +93,37 @@ function getAudioStats(audio: Float32Array): {
 	};
 }
 
-function preparePocketTtsAudio(audio: Float32Array): Float32Array {
-	const trimmed =
-		audio.length > POCKET_TTS_WARMUP_TRIM_SAMPLES
-			? audio.subarray(POCKET_TTS_WARMUP_TRIM_SAMPLES)
-			: audio;
+function concatenateAudioChunks(chunks: Float32Array[]): Float32Array {
+	if (chunks.length === 0) {
+		return new Float32Array(0);
+	}
+
+	const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+	const merged = new Float32Array(totalSamples);
+	let offset = 0;
+	for (const chunk of chunks) {
+		merged.set(chunk, offset);
+		offset += chunk.length;
+	}
+	return merged;
+}
+
+function preparePocketTtsAudio(
+	audio: Float32Array,
+	options: { trimWarmup?: boolean } = {},
+): Float32Array {
+	const shouldTrimWarmup = options.trimWarmup ?? true;
+	const trimSamples = shouldTrimWarmup
+		? Math.min(audio.length, POCKET_TTS_WARMUP_TRIM_SAMPLES)
+		: 0;
+	const trimmed = trimSamples > 0 ? audio.subarray(trimSamples) : audio;
 
 	const before = getAudioStats(trimmed);
 	if (trimmed.length === 0 || before.peak <= 0) {
 		console.log(
 			`[PocketTTS] audio stats pre peak=${before.peak.toFixed(4)} rms=${before.rms.toFixed(4)} trimSamples=${Math.min(
 				audio.length,
-				POCKET_TTS_WARMUP_TRIM_SAMPLES,
+				trimSamples,
 			)} gain=1.00`,
 		);
 		return trimmed;
@@ -114,7 +144,7 @@ function preparePocketTtsAudio(audio: Float32Array): Float32Array {
 	console.log(
 		`[PocketTTS] audio stats pre peak=${before.peak.toFixed(4)} rms=${before.rms.toFixed(4)} post peak=${after.peak.toFixed(4)} rms=${after.rms.toFixed(4)} trimSamples=${Math.min(
 			audio.length,
-			POCKET_TTS_WARMUP_TRIM_SAMPLES,
+			trimSamples,
 		)} gain=${gain.toFixed(2)}`,
 	);
 
@@ -215,11 +245,111 @@ async function cleanupTempFile() {
 	} catch {}
 }
 
-export async function initTTS(): Promise<void> {
-	pocketTTSAvailable = await ensurePocketTTSAvailable();
-	if (pocketTTSAvailable) {
-		await warmPocketTTSIfNeeded();
+async function ensurePlaybackAudioMode(): Promise<void> {
+	console.log("[PocketTTS] playback setting audio mode");
+	await setAudioModeAsync({
+		allowsRecording: false,
+		playsInSilentMode: true,
+		interruptionMode: "doNotMix",
+	});
+	AudioManager.setAudioSessionOptions({
+		iosCategory: "playAndRecord",
+		iosMode: "spokenAudio",
+		iosOptions: [
+			"defaultToSpeaker",
+			"duckOthers",
+			"allowBluetoothA2DP",
+			"allowBluetoothHFP",
+		],
+	});
+	await AudioManager.setAudioSessionActivity(true);
+	console.log("[PocketTTS] playback audio mode ready");
+}
+
+async function ensureStreamedAudioPlayer(): Promise<StreamedAudioPlayer> {
+	if (
+		streamedAudioPlayer &&
+		streamedAudioContext &&
+		streamedAudioContext.state !== "closed"
+	) {
+		if (streamedAudioContext.state !== "running") {
+			await streamedAudioContext.resume();
+		}
+		return streamedAudioPlayer;
 	}
+	if (streamedAudioPlayerPromise) {
+		return streamedAudioPlayerPromise;
+	}
+
+	streamedAudioPlayerPromise = (async () => {
+		const context = new AudioContext({ sampleRate: TTS_SAMPLE_RATE });
+		if (context.state !== "running") {
+			const resumed = await context.resume();
+			console.log(`[PocketTTS] stream context resumed=${String(resumed)}`);
+		}
+		streamedAudioContext = context;
+		streamedAudioPlayer = new StreamedAudioPlayer(context, {
+			sampleRate: TTS_SAMPLE_RATE,
+			onActiveSourceCountChange: (count) => {
+				console.log(`[PocketTTS] stream activeSources=${count}`);
+			},
+			onIdle: () => {
+				const resolve = streamedPlaybackIdleResolver;
+				streamedPlaybackIdleResolver = null;
+				resolve?.();
+			},
+		});
+		return streamedAudioPlayer;
+	})().finally(() => {
+		streamedAudioPlayerPromise = null;
+	});
+
+	return streamedAudioPlayerPromise;
+}
+
+export async function resetStreamedPlaybackRoute(): Promise<void> {
+	streamedPlaybackIdleResolver?.();
+	streamedPlaybackIdleResolver = null;
+
+	try {
+		streamedAudioPlayer?.stopAll();
+	} catch {}
+
+	const context = streamedAudioContext;
+	streamedAudioPlayer = null;
+	streamedAudioContext = null;
+	streamedAudioPlayerPromise = null;
+
+	if (!context || context.state === "closed") {
+		return;
+	}
+
+	try {
+		await context.close();
+		console.log("[PocketTTS] stream context closed");
+	} catch (error) {
+		console.warn("[PocketTTS] failed to close stream context:", error);
+	}
+}
+
+export async function initTTS(): Promise<void> {
+	if (pocketTTSWarmed && (pocketTTSAvailable || isPocketTTSReady())) {
+		return;
+	}
+	if (initTTSPromise) {
+		return initTTSPromise;
+	}
+
+	initTTSPromise = (async () => {
+		pocketTTSAvailable = await ensurePocketTTSAvailable();
+		if (pocketTTSAvailable) {
+			await warmPocketTTSIfNeeded();
+		}
+	})().finally(() => {
+		initTTSPromise = null;
+	});
+
+	return initTTSPromise;
 }
 
 function simulateAmplitude(
@@ -256,6 +386,10 @@ function startAmplitudePlayback(
 ): void {
 	if (!onAmplitude) {
 		return;
+	}
+	if (activeAmplitudeInterval) {
+		clearInterval(activeAmplitudeInterval);
+		activeAmplitudeInterval = null;
 	}
 
 	const amplitudes = estimateAmplitudeFrames(audio, 1024);
@@ -299,13 +433,7 @@ async function playPocketTTS(
 		`[PocketTTS] playback prepare samples=${audio.length} durationMs=${estimatedDurationMs}`,
 	);
 
-	console.log("[PocketTTS] playback setting audio mode");
-	await setAudioModeAsync({
-		allowsRecording: false,
-		playsInSilentMode: true,
-		interruptionMode: "doNotMix",
-	});
-	console.log("[PocketTTS] playback audio mode ready");
+	await ensurePlaybackAudioMode();
 
 	const wavBytes = float32ToWavBytes(audio, TTS_SAMPLE_RATE);
 	const tempFile = `${FileSystem.cacheDirectory}vela_tts_${Date.now()}.wav`;
@@ -327,6 +455,7 @@ async function playPocketTTS(
 		let playbackStartupTimer: ReturnType<typeof setTimeout> | null = null;
 		let statusUpdateCount = 0;
 		let lastStatusFingerprint = "";
+		const playerId = ++playbackInstanceCounter;
 		const finish = (reason: string, error?: Error) => {
 			if (settled) {
 				return;
@@ -347,8 +476,8 @@ async function playPocketTTS(
 			onAmplitude?.(0);
 			console.log(
 				error
-					? `[PocketTTS] playback end reason=${reason} updates=${statusUpdateCount} error=${error.message}`
-					: `[PocketTTS] playback end reason=${reason} updates=${statusUpdateCount}`,
+					? `[PocketTTS] playback end player=${playerId} reason=${reason} updates=${statusUpdateCount} error=${error.message}`
+					: `[PocketTTS] playback end player=${playerId} reason=${reason} updates=${statusUpdateCount}`,
 			);
 			clearPlaybackState();
 			void cleanupTempFile();
@@ -362,7 +491,7 @@ async function playPocketTTS(
 		try {
 			const fallbackMs = Math.max(1200, estimatedDurationMs + 600);
 			console.log(
-				`[PocketTTS] playback creating player updateInterval=100 fallbackMs=${fallbackMs}`,
+				`[PocketTTS] playback creating player=${playerId} updateInterval=100 fallbackMs=${fallbackMs}`,
 			);
 			const player = createAudioPlayer(
 				{ uri: tempFile },
@@ -406,7 +535,7 @@ async function playPocketTTS(
 						status.didJustFinish
 					) {
 						console.log(
-							`[PocketTTS] playback status #${statusUpdateCount} ${formatPlaybackStatus(status)}`,
+							`[PocketTTS] playback status player=${playerId} #${statusUpdateCount} ${formatPlaybackStatus(status)}`,
 						);
 						lastStatusFingerprint = fingerprint;
 					}
@@ -473,6 +602,13 @@ export async function playSpeechAudio(
 	await playPocketTTS(audio, onAmplitude);
 }
 
+export async function speakStreaming(
+	text: string,
+	onAmplitude?: AmplitudeCallback,
+): Promise<void> {
+	await speak(text, onAmplitude);
+}
+
 export async function speak(
 	text: string,
 	onAmplitude?: AmplitudeCallback,
@@ -530,6 +666,9 @@ export async function speak(
 
 export function stopSpeaking(): void {
 	Speech.stop();
+	streamedPlaybackIdleResolver?.();
+	streamedPlaybackIdleResolver = null;
+	streamedAudioPlayer?.stopAll();
 	clearPlaybackState();
 	void cleanupTempFile();
 }

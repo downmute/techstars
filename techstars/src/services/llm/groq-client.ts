@@ -55,6 +55,13 @@ interface StructuredOutputRequest {
 	temperature?: number;
 }
 
+interface JsonObjectRequest {
+	model?: string;
+	messages: ChatMessage[];
+	maxCompletionTokens?: number;
+	temperature?: number;
+}
+
 function getApiKey(): string {
 	const key = process.env.EXPO_PUBLIC_GROQ_API_KEY;
 	if (!key) throw new Error("EXPO_PUBLIC_GROQ_API_KEY is not set");
@@ -391,4 +398,51 @@ export async function chatStructuredOnce<T>(
 	}
 
 	return JSON.parse(content) as T;
+}
+
+export async function chatJsonObjectOnce<T>(
+	request: JsonObjectRequest,
+): Promise<T> {
+	const key = getApiKey();
+
+	const response = await expoFetch(GROQ_API_URL, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${key}`,
+		},
+		body: JSON.stringify({
+			model: request.model ?? MODEL,
+			messages: request.messages,
+			max_completion_tokens: request.maxCompletionTokens ?? 500,
+			temperature: request.temperature ?? 0,
+			response_format: {
+				type: "json_object",
+			},
+		}),
+	});
+
+	if (!response.ok) {
+		const err = await response.text();
+		throw new Error(`Groq JSON object error ${response.status}: ${err}`);
+	}
+
+	const data = (await response.json()) as {
+		choices?: { message?: { content?: string | null } }[];
+	};
+	const content = data.choices?.[0]?.message?.content;
+	if (!content) {
+		throw new Error("Groq JSON object returned no content");
+	}
+
+	try {
+		return JSON.parse(content) as T;
+	} catch {
+		const firstBrace = content.indexOf("{");
+		const lastBrace = content.lastIndexOf("}");
+		if (firstBrace >= 0 && lastBrace > firstBrace) {
+			return JSON.parse(content.slice(firstBrace, lastBrace + 1)) as T;
+		}
+		throw new Error("Groq JSON object returned invalid JSON");
+	}
 }

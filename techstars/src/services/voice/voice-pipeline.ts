@@ -51,10 +51,10 @@ import {
 	transcribeDetailed,
 } from "./stt-engine";
 import {
-	playSpeechAudio,
+	resetStreamedPlaybackRoute,
+	speakStreaming,
 	speak,
 	stopSpeaking,
-	synthesizeSpeechAudio,
 } from "./tts-engine";
 import { decodeBase64Pcm16ToFloat32, STT_SAMPLE_RATE } from "./wav-utils";
 
@@ -573,6 +573,7 @@ async function ensureNativeCaptureStopped(): Promise<void> {
 	await stopNativeAudioCapture();
 	nativeCaptureStarted = false;
 	liveVadStream?.reset();
+	await resetStreamedPlaybackRoute();
 }
 
 async function ensureNativeCaptureStarted(): Promise<void> {
@@ -612,8 +613,6 @@ async function drainSentenceQueue(
 	queue: string[],
 	onAmplitude: (amplitude: number) => void,
 ) {
-	let nextPreparedAudio: Promise<Float32Array | null> | null = null;
-
 	while (queue.length > 0) {
 		if (generation !== turnGeneration) {
 			queue.length = 0;
@@ -626,22 +625,10 @@ async function drainSentenceQueue(
 		}
 
 		setState("speaking");
-		const currentPreparedAudio =
-			nextPreparedAudio ?? synthesizeSpeechAudio(sentence);
-		const nextSentence = normalizeWhitespace(queue[0] ?? "");
-		nextPreparedAudio = nextSentence
-			? synthesizeSpeechAudio(nextSentence)
-			: null;
-
 		try {
-			const preparedAudio = await currentPreparedAudio;
-			if (preparedAudio) {
-				await playSpeechAudio(preparedAudio, onAmplitude);
-			} else {
-				await speak(sentence, onAmplitude);
-			}
+			await speakStreaming(sentence, onAmplitude);
 		} catch (error) {
-			console.warn("[VoicePipeline] prefetched PocketTTS audio failed:", error);
+			console.warn("[VoicePipeline] streamed PocketTTS audio failed:", error);
 			await speak(sentence, onAmplitude);
 		}
 	}
@@ -723,9 +710,16 @@ async function streamAssistantReply(messages: ChatMessage[]): Promise<void> {
 					if (fullUtterance && isMeaningfulText(fullUtterance)) {
 						speechQueue.length = 0;
 						sentenceBuffer = "";
-						speechQueue.push(fullUtterance);
 						hasQueuedSpeech = true;
-						maybeStartSpeech();
+						setState("speaking");
+						speechPromise = speakStreaming(fullUtterance, (amplitude) => {
+							useVoiceStore.getState().setAmplitude(amplitude);
+						}).finally(() => {
+							speechPromise = null;
+							if (finalized && generation === turnGeneration) {
+								setState("idle");
+							}
+						});
 					}
 				} else {
 					const tail = normalizeWhitespace(sentenceBuffer);
